@@ -21,13 +21,10 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# Step 4: Build & Recreate Backend Container (Lightweight Alpine)
+# Step 4: Build & Launch all containers (app, nginx, postgres, certbot)
 echo "⚡ Building & launching application containers..."
 docker compose up -d --build app
-
-# Step 5: Reload Nginx with new static dashboard assets
-echo "🔄 Reloading Nginx..."
-docker compose restart nginx
+docker compose up -d nginx certbot
 
 echo ""
 echo "========================================================"
