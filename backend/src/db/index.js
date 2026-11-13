@@ -25,6 +25,7 @@ export const initDb = async () => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(742914123);');
 
       // 1. Users table
       await client.query(`
@@ -130,6 +131,33 @@ export const initDb = async () => {
         );
       `);
 
+      // 9. Webhooks Table (for external client notification upon approval/denial)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS webhooks (
+          id VARCHAR(64) PRIMARY KEY,
+          user_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
+          url TEXT NOT NULL,
+          secret VARCHAR(64) NOT NULL,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
+      // 10. Webhook Delivery Logs
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS webhook_deliveries (
+          id VARCHAR(64) PRIMARY KEY,
+          webhook_id VARCHAR(64) REFERENCES webhooks(id) ON DELETE CASCADE,
+          event VARCHAR(64) NOT NULL,
+          payload JSONB NOT NULL,
+          response_status INTEGER NULL,
+          response_body TEXT NULL,
+          success BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
       // Create helpful indexes
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_enroll_tokens_token ON enroll_tokens(token);
@@ -137,6 +165,7 @@ export const initDb = async () => {
         CREATE INDEX IF NOT EXISTS idx_login_requests_user_id ON login_requests(user_id);
         CREATE INDEX IF NOT EXISTS idx_used_totp_codes_user_step ON used_totp_codes(user_id, window_step);
         CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_webhooks_user_id ON webhooks(user_id);
       `);
 
       await client.query('COMMIT');

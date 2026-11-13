@@ -11,6 +11,8 @@ import enrollRoutes from './routes/enrollRoutes.js';
 import loginRoutes from './routes/loginRoutes.js';
 import deviceRoutes from './routes/deviceRoutes.js';
 import vapidRoutes from './routes/vapidRoutes.js';
+import webhookRoutes from './routes/webhookRoutes.js';
+import apiV1Routes from './routes/apiV1Routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +69,8 @@ app.use('/api/enroll', enrollRoutes);
 app.use('/api/login', loginRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/vapid-public-key', vapidRoutes);
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/v1', apiV1Routes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

@@ -166,12 +166,20 @@ async function renderAccounts() {
     }
 
     const formattedCode = `${totpCode.slice(0, 3)} ${totpCode.slice(3)}`;
+    const isPushProtected = acc.type === 'authguard_push' || (acc.server && acc.deviceId);
 
     html += `
       <div class="account-card" data-account-id="${acc.id}">
         <div class="account-meta">
           <div>
-            <div class="account-issuer">${acc.issuer || '2FA Account'}</div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+              <span class="account-issuer">${acc.issuer || '2FA Account'}</span>
+              ${
+                isPushProtected
+                  ? '<span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 600;">🛡️ Push Protected</span>'
+                  : '<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 600;">Standard TOTP</span>'
+              }
+            </div>
             <div class="account-email">${acc.account}</div>
           </div>
           <button class="btn-icon delete" title="Delete account" onclick="window.removeAccount('${acc.id}')">
@@ -249,18 +257,106 @@ function startScanning() {
   );
 }
 
-// Process Enrolled QR code
+// Helper to parse standard 2FA URI (otpauth://totp/...) used by Google, GitHub, Microsoft, etc.
+function parseOtpAuthUri(uriString) {
+  try {
+    const raw = uriString.trim();
+    if (!raw.toLowerCase().startsWith('otpauth://')) return null;
+
+    const url = new URL(raw);
+    const type = url.hostname.toLowerCase(); // 'totp' or 'hotp'
+    let label = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+    let issuer = url.searchParams.get('issuer') || '';
+    let account = label;
+
+    if (label.includes(':')) {
+      const parts = label.split(':');
+      if (!issuer) issuer = parts[0].trim();
+      account = parts.slice(1).join(':').trim();
+    }
+
+    const secret = url.searchParams.get('secret');
+    if (!secret) return null;
+
+    return {
+      type: 'standard_totp',
+      secret: secret.trim().toUpperCase(),
+      account: account || '2FA Account',
+      issuer: issuer || 'Standard 2FA',
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Process Enrolled QR code (Supports Standard 2FA QR & AuthGuard Dual QR)
 async function handleQrEnrollment(qrRawString) {
   stopCameraScanner();
+  const rawClean = (qrRawString || '').trim();
   const scanStatusEl = document.getElementById('scan-status');
-  if (scanStatusEl) scanStatusEl.textContent = 'Enrolling device with server...';
 
   try {
+    // -------------------------------------------------------------------
+    // Case A: Standard 2FA QR Code (Google Authenticator, GitHub, AWS, etc.)
+    // -------------------------------------------------------------------
+    const otpAuthData = parseOtpAuthUri(rawClean);
+    if (otpAuthData) {
+      if (scanStatusEl) scanStatusEl.textContent = 'Adding Standard 2FA account...';
+      showToast(`Adding standard 2FA for ${otpAuthData.issuer}...`, 'info');
+
+      const aesKey = await getOrCreateAesKey();
+      const encrypted = await encryptSecret(aesKey, otpAuthData.secret);
+
+      const accountRecord = {
+        id: `standard:${otpAuthData.issuer}:${otpAuthData.account}:${Date.now()}`,
+        server: null,
+        account: otpAuthData.account,
+        issuer: otpAuthData.issuer,
+        encryptedSecret: encrypted.ciphertextB64,
+        iv: encrypted.ivB64,
+        type: 'standard_totp',
+        createdAt: Date.now(),
+      };
+
+      await saveAccount(accountRecord);
+      await refreshAccounts();
+
+      showToast(`Added ${otpAuthData.issuer} (${otpAuthData.account})!`, 'success', 4500);
+      switchView('accounts');
+      return;
+    }
+
+    // -------------------------------------------------------------------
+    // Case B: AuthGuard Dual QR Code (Push + WebCrypto + TOTP)
+    // -------------------------------------------------------------------
     let payload;
     try {
-      payload = JSON.parse(qrRawString);
+      payload = JSON.parse(rawClean);
     } catch {
-      throw new Error('QR code is not in valid JSON format. Ensure you scanned the 2FA setup QR.');
+      // Check if it's a raw base32 secret string e.g. "JBSWY3DPEHPK3PXP"
+      if (/^[A-Z2-7]{16,64}$/i.test(rawClean.replace(/\s+/g, ''))) {
+        const cleanSecret = rawClean.replace(/\s+/g, '').toUpperCase();
+        const aesKey = await getOrCreateAesKey();
+        const encrypted = await encryptSecret(aesKey, cleanSecret);
+
+        const accountRecord = {
+          id: `manual:${Date.now()}`,
+          server: null,
+          account: 'Manual Entry',
+          issuer: 'Standard TOTP',
+          encryptedSecret: encrypted.ciphertextB64,
+          iv: encrypted.ivB64,
+          type: 'standard_totp',
+          createdAt: Date.now(),
+        };
+
+        await saveAccount(accountRecord);
+        await refreshAccounts();
+        showToast('Standard TOTP secret added!', 'success');
+        switchView('accounts');
+        return;
+      }
+      throw new Error('Unrecognized QR format. Please scan a standard 2FA (otpauth://) or AuthGuard QR.');
     }
 
     const { server, enroll_token, secret, account, issuer } = payload;
@@ -268,6 +364,7 @@ async function handleQrEnrollment(qrRawString) {
       throw new Error('Invalid enrollment payload: missing enroll_token or secret.');
     }
 
+    if (scanStatusEl) scanStatusEl.textContent = 'Enrolling device with AuthGuard server...';
     const serverUrl = server || window.location.origin;
 
     // 1. Subscribe to Web Push
@@ -308,6 +405,7 @@ async function handleQrEnrollment(qrRawString) {
       encryptedSecret: encrypted.ciphertextB64,
       iv: encrypted.ivB64,
       deviceId: enrollData.deviceId,
+      type: 'authguard_push',
       createdAt: Date.now(),
     };
 

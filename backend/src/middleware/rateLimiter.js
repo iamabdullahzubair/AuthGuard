@@ -7,6 +7,7 @@ export const globalLimiter = rateLimit({
   max: config.NODE_ENV === 'test' ? 10000 : config.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: { error: 'Too many requests, please try again later.' },
 });
 
@@ -16,6 +17,7 @@ export const authLimiter = rateLimit({
   max: config.NODE_ENV === 'test' ? 10000 : config.AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: { error: 'Too many attempts on authentication endpoints. Please wait 15 minutes.' },
 });
 
@@ -25,6 +27,7 @@ export const recoveryLimiter = rateLimit({
   max: config.NODE_ENV === 'test' ? 10000 : 5,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: { error: 'Too many recovery attempts. Account recovery locked for 15 minutes.' },
 });
 

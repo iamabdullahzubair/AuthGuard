@@ -13,6 +13,7 @@ import {
 import { verifyTotpTokenWithAntiReplay } from '../services/totpService.js';
 import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
+import { dispatchWebhook } from '../services/webhookService.js';
 
 const router = Router();
 
@@ -294,6 +295,13 @@ router.post('/respond', authLimiter, async (req, res) => {
       metadata: { request_id, deviceId: verifiedDevice.id },
     });
 
+    dispatchWebhook(loginReq.user_id, 'login.denied', {
+      requestId: request_id,
+      status: 'denied',
+      reason: 'user_denied',
+      timestamp: Date.now(),
+    });
+
     return res.json({ success: true, status: 'denied', message: 'Login denied.' });
   }
 
@@ -309,6 +317,13 @@ router.post('/respond', authLimiter, async (req, res) => {
       event: 'LOGIN_PUSH_NUMBER_MISMATCH',
       req,
       metadata: { request_id, chosen_number, expected: loginReq.challenge_number },
+    });
+
+    dispatchWebhook(loginReq.user_id, 'login.denied', {
+      requestId: request_id,
+      status: 'denied',
+      reason: 'number_mismatch',
+      timestamp: Date.now(),
     });
 
     return res.status(400).json({
@@ -337,6 +352,16 @@ router.post('/respond', authLimiter, async (req, res) => {
     event: 'LOGIN_PUSH_APPROVED',
     req,
     metadata: { request_id, deviceId: verifiedDevice.id },
+  });
+
+  dispatchWebhook(loginReq.user_id, 'login.approved', {
+    requestId: request_id,
+    userId: loginReq.user_id,
+    email: userEmail,
+    deviceId: verifiedDevice.id,
+    status: 'approved',
+    sessionToken,
+    timestamp: Date.now(),
   });
 
   return res.json({

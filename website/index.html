@@ -93,6 +93,63 @@
         </div>
       </div>
 
+      <!-- Webhooks Management Card -->
+      <div class="card">
+        <h3 class="card-title" style="font-size: 1.25rem;">🔗 Webhooks (Client App Integration)</h3>
+        <p class="card-subtitle">
+          Register a webhook URL to receive instant HTTP callbacks when a user approves or denies login on their Authenticator PWA.
+        </p>
+
+        <form id="webhook-form" style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+          <input type="url" id="webhook-url-input" class="form-input" placeholder="https://my-client-app.com/api/auth-webhook" style="flex: 1; min-width: 260px;" required />
+          <button type="submit" class="btn btn-primary" style="white-space: nowrap;">Register Webhook</button>
+        </form>
+
+        <div id="webhook-list-container">
+          <p style="color: var(--text-muted);">Loading webhooks...</p>
+        </div>
+
+        <div style="margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 0.95rem; margin-bottom: 8px; color: var(--text-muted);">Recent Webhook Deliveries</h4>
+          <div id="webhook-deliveries-container">
+            <p style="color: var(--text-muted); font-size: 0.85rem;">No webhook deliveries yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Developer API: User Enrollment API Tester -->
+      <div class="card" style="border-left: 4px solid var(--primary);">
+        <h3 class="card-title" style="font-size: 1.25rem;">⚡ External Enrollment API (For Other Clients)</h3>
+        <p class="card-subtitle">
+          Other applications can call <code>POST /api/v1/enroll</code> to programmatically enroll a user and receive a setup QR code in the JSON response.
+        </p>
+
+        <div style="background-color: var(--bg-input); padding: 16px; border-radius: var(--radius); margin-bottom: 16px; font-family: monospace; font-size: 0.85rem; color: #38bdf8; overflow-x: auto;">
+          curl -X POST https://15.135.173.157.nip.io/api/v1/enroll \<br/>
+          &nbsp;&nbsp;-H "Content-Type: application/json" \<br/>
+          &nbsp;&nbsp;-d '{"email": "customer@clientapp.com", "issuer": "MyStore", "webhookUrl": "https://clientapp.com/webhook"}'
+        </div>
+
+        <form id="api-tester-form" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+          <input type="email" id="api-test-email" class="form-input" placeholder="client-user@example.com" style="flex: 1; min-width: 200px;" required />
+          <input type="text" id="api-test-issuer" class="form-input" placeholder="Issuer Name (e.g. MyStore)" style="flex: 1; min-width: 160px;" />
+          <button type="submit" class="btn btn-secondary">Generate QR via API</button>
+        </form>
+
+        <div id="api-result-box" style="display: none; padding: 16px; background-color: var(--bg-input); border-radius: var(--radius); border: 1px solid var(--border);">
+          <h4 style="margin-bottom: 8px; font-size: 0.95rem;">API Enrollment Result:</h4>
+          <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+            <img id="api-result-qr" src="" alt="API QR" style="width: 140px; height: 140px; background: white; padding: 6px; border-radius: 8px;" />
+            <div style="flex: 1; min-width: 240px; font-size: 0.85rem; line-height: 1.5; color: var(--text-muted);">
+              <div><strong>Email:</strong> <span id="api-result-email" style="color: var(--text-main);"></span></div>
+              <div><strong>Issuer:</strong> <span id="api-result-issuer" style="color: var(--text-main);"></span></div>
+              <div><strong>TOTP Secret:</strong> <span id="api-result-secret" style="font-family: monospace; color: #60a5fa;"></span></div>
+              <div><strong>Token:</strong> <span id="api-result-token" style="font-family: monospace; font-size: 0.75rem;"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Quick Tester Guide Card -->
       <div class="card" style="border-left: 4px solid var(--primary);">
         <h3 style="font-size: 1.1rem; margin-bottom: 8px;">How to test the dual flow:</h3>

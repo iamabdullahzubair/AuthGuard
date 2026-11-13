@@ -1,9 +1,12 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import app from '../src/app.js';
+import { initDb, query } from '../src/db/index.js';
 import { generateTotp } from '../../pwa/src/totp.js';
 
-const BASE_URL = 'http://localhost:3001';
+let server;
+let BASE_URL = '';
 
 // Polyfill window.crypto for PWA functions in node
 if (!globalThis.window) {
@@ -20,6 +23,30 @@ describe('End-to-End System Flow', () => {
   let deviceKeypair;
   let deviceJwk;
   let recoveryCodes = [];
+
+  before(async () => {
+    await initDb();
+    await new Promise((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        BASE_URL = `http://127.0.0.1:${port}`;
+        resolve();
+      });
+    });
+  });
+
+  after(async () => {
+    if (userId) {
+      await query(`DELETE FROM used_totp_codes WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM login_requests WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM devices WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM totp_secrets WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM enroll_tokens WHERE user_id = $1`, [userId]).catch(() => {});
+      await query(`DELETE FROM users WHERE id = $1`, [userId]).catch(() => {});
+    }
+    server?.close();
+  });
 
   test('1. User Registration on Website', async () => {
     const res = await fetch(`${BASE_URL}/api/auth/register`, {
@@ -240,4 +267,3 @@ describe('End-to-End System Flow', () => {
     assert.equal(revokedDev.status, 'revoked');
   });
 });
-

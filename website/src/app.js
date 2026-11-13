@@ -80,6 +80,7 @@ function setUser(user) {
     document.getElementById('dash-email').textContent = user.email;
     update2FaStatus(user.two_factor_enabled);
     loadDevices();
+    loadWebhooks();
   } else {
     showAuth();
   }
@@ -427,6 +428,132 @@ window.revokeDevice = async (id) => {
     }
   }
 };
+
+// Webhook Management
+async function loadWebhooks() {
+  const listContainer = document.getElementById('webhook-list-container');
+  const deliveriesContainer = document.getElementById('webhook-deliveries-container');
+  if (!listContainer) return;
+
+  try {
+    const data = await api('/api/webhooks');
+    const webhooks = data.webhooks || [];
+    const deliveries = data.deliveries || [];
+
+    if (webhooks.length === 0) {
+      listContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">No webhooks registered. Add a webhook URL above.</p>';
+    } else {
+      let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+      webhooks.forEach((hook) => {
+        html += `
+          <div style="background-color: var(--bg-input); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div style="min-width: 240px; flex: 1;">
+              <div style="font-weight: 600; color: #38bdf8; word-break: break-all;">${hook.url}</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace; margin-top: 2px;">
+                Secret: ${hook.secret.slice(0, 10)}... (HMAC-SHA256 signature)
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 6px 12px;" onclick="window.testWebhook('${hook.id}')">Test Ping</button>
+              <button class="btn btn-danger" style="font-size: 0.8rem; padding: 6px 12px;" onclick="window.deleteWebhook('${hook.id}')">Delete</button>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      listContainer.innerHTML = html;
+    }
+
+    if (deliveriesContainer) {
+      if (deliveries.length === 0) {
+        deliveriesContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">No recent webhook deliveries.</p>';
+      } else {
+        let dHtml = '<table class="device-table" style="font-size: 0.85rem;"><thead><tr><th>Time</th><th>Event</th><th>URL</th><th>Status</th></tr></thead><tbody>';
+        deliveries.forEach((del) => {
+          const time = new Date(del.created_at).toLocaleTimeString();
+          const statusBadge = del.success
+            ? `<span class="badge badge-on">${del.response_status || 200} OK</span>`
+            : `<span class="badge badge-off">${del.response_status || 'ERR'}</span>`;
+          dHtml += `<tr><td>${time}</td><td><code>${del.event}</code></td><td style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${del.url || ''}</td><td>${statusBadge}</td></tr>`;
+        });
+        dHtml += '</tbody></table>';
+        deliveriesContainer.innerHTML = dHtml;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load webhooks:', err);
+  }
+}
+
+window.deleteWebhook = async (id) => {
+  if (confirm('Delete this webhook?')) {
+    try {
+      await api(`/api/webhooks/${id}`, { method: 'DELETE' });
+      await loadWebhooks();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+};
+
+window.testWebhook = async (id) => {
+  try {
+    await api(`/api/webhooks/${id}/test`, { method: 'POST' });
+    alert('Test ping sent to your webhook! Refreshing logs...');
+    setTimeout(loadWebhooks, 1000);
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+// Bind Webhook Form
+const webhookForm = document.getElementById('webhook-form');
+if (webhookForm) {
+  webhookForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const urlInput = document.getElementById('webhook-url-input');
+    const url = urlInput.value.trim();
+    try {
+      await api('/api/webhooks', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      });
+      urlInput.value = '';
+      await loadWebhooks();
+      alert('Webhook registered successfully!');
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+}
+
+// Bind External API Tester Form
+const apiTesterForm = document.getElementById('api-tester-form');
+if (apiTesterForm) {
+  apiTesterForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('api-test-email').value.trim();
+    const issuer = document.getElementById('api-test-issuer').value.trim() || 'MyClientApp';
+
+    try {
+      const res = await api('/api/v1/enroll', {
+        method: 'POST',
+        body: JSON.stringify({ email, issuer }),
+      });
+
+      const resultBox = document.getElementById('api-result-box');
+      document.getElementById('api-result-qr').src = res.qrCodeDataUrl;
+      document.getElementById('api-result-email').textContent = res.email;
+      document.getElementById('api-result-issuer').textContent = res.issuer;
+      document.getElementById('api-result-secret').textContent = res.totpSecret;
+      document.getElementById('api-result-token').textContent = res.enrollToken.slice(0, 16) + '...';
+
+      resultBox.style.display = 'block';
+    } catch (err) {
+      alert('API Enrollment Error: ' + err.message);
+    }
+  });
+}
 
 // Bootstrap
 init();
