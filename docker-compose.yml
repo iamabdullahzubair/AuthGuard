@@ -41,7 +41,22 @@ services:
     networks:
       - auth_net
 
-  # 3. Nginx Reverse Proxy with SSL (Port 80 & 443)
+  # 3. Next.js Frontend Dashboard (Super Admin & Tenant Client UI)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: auth_frontend
+    restart: always
+    environment:
+      PORT: 3000
+      INTERNAL_BACKEND_URL: http://app:3001
+    depends_on:
+      - app
+    networks:
+      - auth_net
+
+  # 4. Nginx Reverse Proxy with SSL (Port 80 & 443)
   nginx:
     image: nginx:1.27-alpine
     container_name: auth_nginx
@@ -57,10 +72,11 @@ services:
       - certbot-var:/var/www/certbot
     depends_on:
       - app
+      - frontend
     networks:
       - auth_net
 
-  # 4. Certbot for Automated Let's Encrypt SSL Renewals
+  # 5. Certbot for Automated Let's Encrypt SSL Renewals
   certbot:
     image: certbot/certbot:latest
     container_name: auth_certbot
