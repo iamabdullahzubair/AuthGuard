@@ -1,16 +1,35 @@
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
+import { dispatchTenantWebhook } from './tenantWebhookService.js';
 
 /**
- * Dispatch webhook notification to all active webhooks for a user
+ * Dispatch webhook notification to all active webhooks for a user and their tenant organization
  * Signs the payload with HMAC-SHA256 using the webhook's secret.
  *
  * @param {string} userId - User identifier
- * @param {string} event - Event name: 'login.approved', 'login.denied', 'ping'
+ * @param {string} event - Event name: 'login.approved', 'login.denied', 'user.enrolled', 'ping'
  * @param {object} eventData - Associated data payload
  */
 export async function dispatchWebhook(userId, event, eventData) {
   try {
+    // 1. Dispatch to Tenant Webhooks if this user belongs to an organization/tenant
+    const userRes = await query('SELECT email FROM users WHERE id = $1', [userId]);
+    const email = userRes.rows[0]?.email;
+    if (email) {
+      const tenantRes = await query(
+        'SELECT tenant_id FROM end_users WHERE email = $1 LIMIT 1',
+        [email.toLowerCase().trim()]
+      );
+      if (tenantRes.rows.length > 0 && tenantRes.rows[0].tenant_id) {
+        dispatchTenantWebhook(tenantRes.rows[0].tenant_id, event, {
+          ...eventData,
+          email,
+          userId,
+        }).catch(() => {});
+      }
+    }
+
+    // 2. Also dispatch to user-specific webhooks if registered
     const webhooksRes = await query(
       `SELECT id, url, secret FROM webhooks WHERE user_id = $1 AND is_active = true`,
       [userId]

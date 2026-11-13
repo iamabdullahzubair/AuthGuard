@@ -61,8 +61,7 @@ curl -X POST ${originUrl}/api/v1/enroll \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
     "email": "customer@yourcompany.com",
-    "issuer": "YourApp",
-    "webhookUrl": "https://yourcompany.com/authguard-webhook"
+    "issuer": "YourApp"
   }'`,
     },
 
@@ -110,7 +109,6 @@ const enrollRes = await fetch('${originUrl}/api/v1/enroll', {
   body: JSON.stringify({
     email: 'customer@yourcompany.com',
     issuer: 'YourApp',
-    webhookUrl: 'https://yourcompany.com/authguard-webhook',
   }),
 }).then(res => res.json());
 
@@ -161,8 +159,7 @@ res = requests.post(
     headers={"X-Api-Key": "${liveApiKey}"},
     json={
         "email": "customer@yourcompany.com",
-        "issuer": "YourApp",
-        "webhookUrl": "https://yourcompany.com/authguard-webhook"
+        "issuer": "YourApp"
     }
 )
 data = res.json()

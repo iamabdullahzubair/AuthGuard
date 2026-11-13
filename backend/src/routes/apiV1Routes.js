@@ -57,6 +57,7 @@ router.post('/enroll', async (req, res) => {
 
   const { email, issuer, webhookUrl } = parseResult.data;
   const normalizedEmail = email.toLowerCase().trim();
+  const resolvedIssuer = issuer || req.tenant?.branding?.issuerName || req.tenant?.name || 'AuthGuard';
 
   try {
     // 1. Find or create user
@@ -77,7 +78,24 @@ router.post('/enroll', async (req, res) => {
       );
     }
 
-    // 2. Register Webhook if requested
+    // 2. Link to tenant organization if API key is provided
+    if (req.tenant) {
+      await query(
+        `INSERT INTO end_users (id, tenant_id, email, two_factor_enabled)
+         VALUES ($1, $2, $3, false)
+         ON CONFLICT (tenant_id, email) DO NOTHING`,
+        [crypto.randomUUID(), req.tenant.id, normalizedEmail]
+      );
+
+      // Trigger organization webhook configured in dashboard
+      dispatchTenantWebhook(req.tenant.id, 'user.enrolled', {
+        email: normalizedEmail,
+        userId,
+        timestamp: Date.now(),
+      }).catch(() => {});
+    }
+
+    // 3. Register legacy user-specific webhook ONLY if explicitly passed
     let registeredWebhookId = null;
     if (webhookUrl) {
       const webhookSecret = crypto.randomBytes(24).toString('hex');
@@ -91,7 +109,7 @@ router.post('/enroll', async (req, res) => {
       registeredWebhookId = webhookId;
     }
 
-    // 3. Generate TOTP secret and one-time enroll_token
+    // 4. Generate TOTP secret and one-time enroll_token
     const secret = generateTotpSecret();
     const encryptedSecret = encryptAesGcm(secret);
 
@@ -113,20 +131,20 @@ router.post('/enroll', async (req, res) => {
       ]
     );
 
-    // 4. Resolve Server URL dynamically from request
+    // 5. Resolve Server URL dynamically from request
     const forwardedProto = req.headers['x-forwarded-proto'];
     const forwardedHost = req.headers['x-forwarded-host'];
     const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
     const host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
     const serverUrl = host ? `${protocol}://${host}` : config.APP_URL;
 
-    // 5. Construct QR payload
+    // 6. Construct QR payload
     const qrPayload = {
       server: serverUrl,
       enroll_token: enrollToken,
       secret,
       account: normalizedEmail,
-      issuer: issuer || 'AuthGuard',
+      issuer: resolvedIssuer,
     };
 
     const qrCodeDataUrl = await generateQrCodeDataUrl(qrPayload);
@@ -135,13 +153,13 @@ router.post('/enroll', async (req, res) => {
       success: true,
       userId,
       email: normalizedEmail,
-      issuer: issuer || 'AuthGuard',
+      issuer: resolvedIssuer,
       enrollToken,
       totpSecret: secret,
       qrCodeDataUrl,
       qrPayload,
       expiresAt: expiresAt.toISOString(),
-      webhookId: registeredWebhookId,
+      ...(registeredWebhookId ? { webhookId: registeredWebhookId } : {}),
       message: 'Scan this QR code with AuthGuard Authenticator PWA to complete registration.',
     });
   } catch (err) {
