@@ -3,13 +3,34 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/index.js';
 import { config } from '../config/index.js';
-import { encryptAesGcm, hashPassword } from '../services/cryptoService.js';
-import { generateTotpSecret, generateQrCodeDataUrl } from '../services/totpService.js';
+import { encryptAesGcm, decryptAesGcm, hashPassword } from '../services/cryptoService.js';
+import { generateTotpSecret, generateQrCodeDataUrl, verifyTotpTokenWithAntiReplay } from '../services/totpService.js';
 import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
+import { verifyApiKey } from '../services/apiKeyService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
+
+// Middleware: Optional API Key Context Resolution
+router.use(async (req, res, next) => {
+  let rawKey = req.headers['x-api-key'];
+  if (!rawKey && req.headers.authorization) {
+    const parts = req.headers.authorization.split(' ');
+    if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+      rawKey = parts[1];
+    }
+  }
+
+  if (rawKey && (rawKey.startsWith('ag_live_') || rawKey.startsWith('ag_test_'))) {
+    const auth = await verifyApiKey(rawKey).catch(() => null);
+    if (auth && !auth.error) {
+      req.tenant = auth.tenant;
+      req.apiKey = { id: auth.keyId, name: auth.keyName, environment: auth.environment };
+    }
+  }
+  next();
+});
 
 const enrollUserSchema = z.object({
   email: z.string().email('Valid email address required'),
@@ -255,6 +276,147 @@ router.get('/push/status/:requestId', async (req, res) => {
   } catch (err) {
     console.error('[API v1 Push Status Error]:', err);
     return res.status(500).json({ error: 'Failed to check status' });
+  }
+});
+
+/**
+ * GET & POST /api/v1/users/status?email=user@example.com
+ * Client checks whether an end-user is enrolled and what 2FA factors are ready
+ */
+const checkUserStatusHandler = async (req, res) => {
+  const email = req.query.email || req.body?.email;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'User email parameter required' });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+
+  try {
+    let userRes;
+    if (req.tenant) {
+      userRes = await query(
+        `SELECT u.id, u.email, u.two_factor_enabled,
+                COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices
+         FROM end_users u
+         LEFT JOIN end_user_devices d ON u.id = d.end_user_id
+         WHERE u.tenant_id = $1 AND u.email = $2
+         GROUP BY u.id`,
+        [req.tenant.id, normalizedEmail]
+      );
+    } else {
+      userRes = await query(
+        `SELECT u.id, u.email, u.two_factor_enabled,
+                COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices
+         FROM users u
+         LEFT JOIN devices d ON u.id = d.user_id
+         WHERE u.email = $1
+         GROUP BY u.id`,
+        [normalizedEmail]
+      );
+    }
+
+    if (userRes.rows.length === 0) {
+      return res.json({
+        enrolled: false,
+        email: normalizedEmail,
+        factors: [],
+        activeDevices: 0,
+        twoFactorEnabled: false,
+      });
+    }
+
+    const user = userRes.rows[0];
+    const activeDevices = parseInt(user.active_devices, 10);
+    const factors = [];
+    if (user.two_factor_enabled) factors.push('totp');
+    if (activeDevices > 0) factors.push('push');
+
+    return res.json({
+      enrolled: factors.length > 0,
+      email: normalizedEmail,
+      factors,
+      activeDevices,
+      twoFactorEnabled: Boolean(user.two_factor_enabled),
+    });
+  } catch (err) {
+    console.error('[API v1 User Status Error]:', err);
+    return res.status(500).json({ error: 'Failed to check user enrollment status' });
+  }
+};
+
+router.get('/users/status', checkUserStatusHandler);
+router.post('/users/status', checkUserStatusHandler);
+
+/**
+ * POST /api/v1/totp/verify
+ * Client application verifies a 6-digit TOTP code for a user
+ */
+router.post('/totp/verify', authLimiter, async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) {
+    return res.status(400).json({ error: 'Email and 6-digit TOTP code required' });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const cleanCode = String(code).trim().replace(/\s+/g, '');
+
+  try {
+    let secret = null;
+    let userId = null;
+
+    if (req.tenant) {
+      const tenantUser = await query(
+        `SELECT u.id, ut.encrypted_secret
+         FROM end_users u
+         JOIN end_user_totp ut ON u.id = ut.end_user_id
+         WHERE u.tenant_id = $1 AND u.email = $2`,
+        [req.tenant.id, normalizedEmail]
+      );
+      if (tenantUser.rows.length > 0 && tenantUser.rows[0].encrypted_secret) {
+        userId = tenantUser.rows[0].id;
+        const enc = typeof tenantUser.rows[0].encrypted_secret === 'string'
+          ? JSON.parse(tenantUser.rows[0].encrypted_secret)
+          : tenantUser.rows[0].encrypted_secret;
+        secret = decryptAesGcm(enc);
+      }
+    }
+
+    if (!secret) {
+      const legacyUser = await query(
+        `SELECT id, totp_secret, two_factor_enabled FROM users WHERE email = $1`,
+        [normalizedEmail]
+      );
+      if (legacyUser.rows.length > 0 && legacyUser.rows[0].totp_secret) {
+        userId = legacyUser.rows[0].id;
+        const enc = typeof legacyUser.rows[0].totp_secret === 'string'
+          ? JSON.parse(legacyUser.rows[0].totp_secret)
+          : legacyUser.rows[0].totp_secret;
+        secret = decryptAesGcm(enc);
+      }
+    }
+
+    if (!secret || !userId) {
+      return res.status(404).json({ error: 'User not found or TOTP not enrolled' });
+    }
+
+    const verifyResult = await verifyTotpTokenWithAntiReplay(userId, secret, cleanCode);
+    if (!verifyResult.valid) {
+      return res.status(400).json({
+        success: false,
+        valid: false,
+        error: verifyResult.error || 'Invalid or expired TOTP code',
+      });
+    }
+
+    return res.json({
+      success: true,
+      valid: true,
+      email: normalizedEmail,
+      message: 'TOTP verified successfully',
+    });
+  } catch (err) {
+    console.error('[API v1 TOTP Verify Error]:', err);
+    return res.status(500).json({ error: 'Failed to verify TOTP code' });
   }
 });
 

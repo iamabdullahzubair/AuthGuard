@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Copy, Check, Terminal } from 'lucide-react';
+import { Copy, Check, Terminal, Shield, CheckCircle2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 
 export default function DocsPage() {
-  const [activeTab, setActiveTab] = useState<'curl' | 'node' | 'python' | 'php' | 'go'>('curl');
+  const [activeTab, setActiveTab] = useState<'curl' | 'node' | 'python'>('curl');
   const [liveApiKey, setLiveApiKey] = useState('ag_live_YOUR_API_KEY');
   const [copied, setCopied] = useState<string | null>(null);
   const [originUrl, setOriginUrl] = useState('https://auth.yourcompany.com');
@@ -32,10 +32,30 @@ export default function DocsPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const codeSnippets: Record<string, { title: string; enroll: string; challenge: string }> = {
+  const codeSnippets = {
     curl: {
-      title: 'cURL',
-      enroll: `# 1. Enroll User & Generate Setup QR Code
+      preauth: `# 1. Check if user is enrolled & what 2FA factors are ready
+curl -X GET "${originUrl}/api/v1/users/status?email=customer@yourcompany.com" \\
+  -H "X-Api-Key: ${liveApiKey}"`,
+
+      push: `# 2. Option A: Trigger Phishing-Resistant 2FA Push Challenge
+curl -X POST ${originUrl}/api/v1/push/challenge \\
+  -H "Content-Type: application/json" \\
+  -H "X-Api-Key: ${liveApiKey}" \\
+  -d '{
+    "email": "customer@yourcompany.com"
+  }'`,
+
+      totp: `# 3. Option B: Verify 6-Digit TOTP Passcode
+curl -X POST ${originUrl}/api/v1/totp/verify \\
+  -H "Content-Type: application/json" \\
+  -H "X-Api-Key: ${liveApiKey}" \\
+  -d '{
+    "email": "customer@yourcompany.com",
+    "code": "481920"
+  }'`,
+
+      enroll: `# 4. If User Not Enrolled: Generate Setup QR Code
 curl -X POST ${originUrl}/api/v1/enroll \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
@@ -44,18 +64,44 @@ curl -X POST ${originUrl}/api/v1/enroll \\
     "issuer": "YourApp",
     "webhookUrl": "https://yourcompany.com/authguard-webhook"
   }'`,
-      challenge: `# 2. Trigger Phishing-Resistant 2FA Push Challenge
-curl -X POST ${originUrl}/api/v1/push/challenge \\
-  -H "Content-Type: application/json" \\
-  -H "X-Api-Key: ${liveApiKey}" \\
-  -d '{
-    "email": "customer@yourcompany.com"
-  }'`,
     },
+
     node: {
-      title: 'Node.js',
-      enroll: `// 1. Enroll User
-const response = await fetch('${originUrl}/api/v1/enroll', {
+      preauth: `// 1. Check User Enrollment Status
+const statusRes = await fetch('${originUrl}/api/v1/users/status?email=' + encodeURIComponent('customer@yourcompany.com'), {
+  headers: { 'X-Api-Key': '${liveApiKey}' },
+});
+const { enrolled, factors, activeDevices } = await statusRes.json();
+// factors: ['push', 'totp']`,
+
+      push: `// 2. Option A: Trigger 2FA Push Challenge
+const challenge = await fetch('${originUrl}/api/v1/push/challenge', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Api-Key': '${liveApiKey}',
+  },
+  body: JSON.stringify({ email: 'customer@yourcompany.com' }),
+}).then(res => res.json());
+
+console.log('Match number to display to customer:', challenge.challengeNumber);`,
+
+      totp: `// 3. Option B: Verify 6-Digit TOTP Code
+const totpRes = await fetch('${originUrl}/api/v1/totp/verify', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Api-Key': '${liveApiKey}',
+  },
+  body: JSON.stringify({ email: 'customer@yourcompany.com', code: '481920' }),
+}).then(res => res.json());
+
+if (totpRes.valid) {
+  // Login succeeded!
+}`,
+
+      enroll: `// 4. Enroll User & Generate Setup QR Code
+const enrollRes = await fetch('${originUrl}/api/v1/enroll', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -66,26 +112,50 @@ const response = await fetch('${originUrl}/api/v1/enroll', {
     issuer: 'YourApp',
     webhookUrl: 'https://yourcompany.com/authguard-webhook',
   }),
-});
-const { qrCodeDataUrl, enrollToken } = await response.json();
-// Present qrCodeDataUrl image to your customer to scan with Authenticator PWA!`,
-      challenge: `// 2. Trigger 2FA Push Challenge
-const challenge = await fetch('${originUrl}/api/v1/push/challenge', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'X-Api-Key': '${liveApiKey}',
-  },
-  body: JSON.stringify({ email: 'customer@yourcompany.com' }),
 }).then(res => res.json());
 
-console.log('Match number to display on web screen:', challenge.challengeNumber);`,
+// Present enrollRes.qrCodeDataUrl image on your screen to scan with AuthGuard App!`,
     },
+
     python: {
-      title: 'Python',
+      preauth: `import requests
+
+# 1. Check User Enrollment Status
+headers = {"X-Api-Key": "${liveApiKey}"}
+res = requests.get(
+    "${originUrl}/api/v1/users/status",
+    params={"email": "customer@yourcompany.com"},
+    headers=headers
+)
+data = res.json()
+print("Enrolled:", data.get("enrolled"), "Factors:", data.get("factors"))`,
+
+      push: `import requests
+
+# 2. Option A: Trigger 2FA Push Challenge
+res = requests.post(
+    "${originUrl}/api/v1/push/challenge",
+    headers={"X-Api-Key": "${liveApiKey}"},
+    json={"email": "customer@yourcompany.com"}
+)
+challenge = res.json()
+print("Display match number to user:", challenge["challengeNumber"])`,
+
+      totp: `import requests
+
+# 3. Option B: Verify 6-Digit TOTP Code
+res = requests.post(
+    "${originUrl}/api/v1/totp/verify",
+    headers={"X-Api-Key": "${liveApiKey}"},
+    json={"email": "customer@yourcompany.com", "code": "481920"}
+)
+result = res.json()
+if result.get("valid"):
+    print("TOTP verification success!")`,
+
       enroll: `import requests
 
-# 1. Enroll User
+# 4. Enroll User & Generate Setup QR Code
 res = requests.post(
     "${originUrl}/api/v1/enroll",
     headers={"X-Api-Key": "${liveApiKey}"},
@@ -97,158 +167,112 @@ res = requests.post(
 )
 data = res.json()
 print("QR Code Data URL:", data["qrCodeDataUrl"])`,
-      challenge: `import requests
-
-# 2. Trigger 2FA Push Challenge
-res = requests.post(
-    "${originUrl}/api/v1/push/challenge",
-    headers={"X-Api-Key": "${liveApiKey}"},
-    json={"email": "customer@yourcompany.com"}
-)
-challenge = res.json()
-print("Display this number to user:", challenge["challengeNumber"])`,
-    },
-    php: {
-      title: 'PHP',
-      enroll: `<?php
-// 1. Enroll User
-$ch = curl_init('${originUrl}/api/v1/enroll');
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Content-Type: application/json',
-    'X-Api-Key: ${liveApiKey}'
-]);
-curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-    'email' => 'customer@yourcompany.com',
-    'issuer' => 'YourApp',
-    'webhookUrl' => 'https://yourcompany.com/authguard-webhook'
-]));
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-$result = json_decode(curl_exec($ch), true);
-echo $result['qrCodeDataUrl'];`,
-      challenge: `<?php
-// 2. Trigger 2FA Push Challenge
-$ch = curl_init('${originUrl}/api/v1/push/challenge');
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Content-Type: application/json',
-    'X-Api-Key: ${liveApiKey}'
-]);
-curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-    'email' => 'customer@yourcompany.com'
-]));
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-$challenge = json_decode(curl_exec($ch), true);
-echo "Match number: " . $challenge['challengeNumber'];`,
-    },
-    go: {
-      title: 'Go',
-      enroll: `package main
-
-import (
-    "bytes"
-    "encoding/json"
-    "net/http"
-)
-
-func main() {
-    payload, _ := json.Marshal(map[string]string{
-        "email": "customer@yourcompany.com",
-        "issuer": "YourApp",
-        "webhookUrl": "https://yourcompany.com/authguard-webhook",
-    })
-    req, _ := http.NewRequest("POST", "${originUrl}/api/v1/enroll", bytes.NewBuffer(payload))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("X-Api-Key", "${liveApiKey}")
-
-    client := &http.Client{}
-    resp, _ := client.Do(req)
-    defer resp.Body.Close()
-}`,
-      challenge: `package main
-
-import (
-    "bytes"
-    "encoding/json"
-    "net/http"
-)
-
-func main() {
-    payload, _ := json.Marshal(map[string]string{
-        "email": "customer@yourcompany.com",
-    })
-    req, _ := http.NewRequest("POST", "${originUrl}/api/v1/push/challenge", bytes.NewBuffer(payload))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("X-Api-Key", "${liveApiKey}")
-
-    client := &http.Client{}
-    resp, _ := client.Do(req)
-    defer resp.Body.Close()
-}`,
     },
   };
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">Developer SDK & Documentation</h1>
+        <h1 className="text-2xl font-bold text-white tracking-tight">Developer SDK & API Documentation</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Integrate AuthGuard 2FA into your existing stack in under 5 minutes
+          Complete client authentication lifecycle: Pre-Auth Check $\rightarrow$ Push/TOTP Verification $\rightarrow$ Onboarding Enrollment
         </p>
       </div>
 
       {/* Language Selector */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
-        {(['curl', 'node', 'python', 'php', 'go'] as const).map((lang) => (
+        {(['curl', 'node', 'python'] as const).map((lang) => (
           <button
             key={lang}
             onClick={() => setActiveTab(lang)}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold capitalize transition-colors ${
+            className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-colors ${
               activeTab === lang
                 ? 'bg-blue-600 text-white'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
           >
-            {codeSnippets[lang].title}
+            {lang === 'curl' ? 'cURL' : lang === 'node' ? 'Node.js' : 'Python'}
           </button>
         ))}
       </div>
 
-      {/* Snippet 1: Enroll */}
+      {/* Step 1: Pre-Auth Check */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-blue-400" />
-            <span className="text-xs font-semibold text-white">Step 1: User Enrollment & Setup QR</span>
+            <CheckCircle2 className="h-4 w-4 text-blue-400" />
+            <span className="text-xs font-semibold text-white">1. Pre-Auth: Check If User Is Registered</span>
+          </div>
+          <button
+            onClick={() => copyCode('preauth', codeSnippets[activeTab].preauth)}
+            className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 font-medium transition-colors"
+          >
+            {copied === 'preauth' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied === 'preauth' ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+        <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/70 leading-relaxed">
+          {codeSnippets[activeTab].preauth}
+        </pre>
+      </div>
+
+      {/* Step 2: Push Challenge */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-emerald-400" />
+            <span className="text-xs font-semibold text-white">2. Factor A: Trigger 2FA Push Challenge</span>
+          </div>
+          <button
+            onClick={() => copyCode('push', codeSnippets[activeTab].push)}
+            className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 font-medium transition-colors"
+          >
+            {copied === 'push' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied === 'push' ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+        <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/70 leading-relaxed">
+          {codeSnippets[activeTab].push}
+        </pre>
+      </div>
+
+      {/* Step 3: TOTP Code */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-amber-400" />
+            <span className="text-xs font-semibold text-white">3. Factor B: Verify 6-Digit TOTP Passcode</span>
+          </div>
+          <button
+            onClick={() => copyCode('totp', codeSnippets[activeTab].totp)}
+            className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 font-medium transition-colors"
+          >
+            {copied === 'totp' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied === 'totp' ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+        <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/70 leading-relaxed">
+          {codeSnippets[activeTab].totp}
+        </pre>
+      </div>
+
+      {/* Step 4: Enroll */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-purple-400" />
+            <span className="text-xs font-semibold text-white">4. User Enrollment: Generate QR Code for New Users</span>
           </div>
           <button
             onClick={() => copyCode('enroll', codeSnippets[activeTab].enroll)}
             className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 font-medium transition-colors"
           >
             {copied === 'enroll' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copied === 'enroll' ? 'Copied' : 'Copy Snippet'}</span>
+            <span>{copied === 'enroll' ? 'Copied' : 'Copy'}</span>
           </button>
         </div>
         <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/70 leading-relaxed">
           {codeSnippets[activeTab].enroll}
-        </pre>
-      </div>
-
-      {/* Snippet 2: Challenge */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-emerald-400" />
-            <span className="text-xs font-semibold text-white">Step 2: Trigger 2FA Push Challenge</span>
-          </div>
-          <button
-            onClick={() => copyCode('challenge', codeSnippets[activeTab].challenge)}
-            className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 font-medium transition-colors"
-          >
-            {copied === 'challenge' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copied === 'challenge' ? 'Copied' : 'Copy Snippet'}</span>
-          </button>
-        </div>
-        <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/70 leading-relaxed">
-          {codeSnippets[activeTab].challenge}
         </pre>
       </div>
     </div>

@@ -30,7 +30,6 @@ COPY --from=builder /usr/src/app/backend/node_modules ./backend/node_modules
 
 # Copy application source code
 COPY backend ./backend
-COPY pwa ./pwa
 
 # Create non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

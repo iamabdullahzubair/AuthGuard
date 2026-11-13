@@ -2,8 +2,10 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/index.js';
-import { hashPassword, verifyPassword } from '../services/cryptoService.js';
+import { config } from '../config/index.js';
+import { hashPassword, verifyPassword, encryptAesGcm } from '../services/cryptoService.js';
 import { generateApiKey, listApiKeys, revokeApiKey } from '../services/apiKeyService.js';
+import { generateTotpSecret, generateQrCodeDataUrl } from '../services/totpService.js';
 import { deliverToWebhook } from '../services/tenantWebhookService.js';
 import { createMemberToken, tenantSessionAuth } from '../middleware/tenantSessionAuth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -398,6 +400,115 @@ router.get('/users', async (req, res) => {
   );
 
   return res.json({ users: result.rows });
+});
+
+/**
+ * POST /api/tenant/users/enroll
+ * Tenant Admin generates 2FA enrollment QR code for an end-user from the dashboard
+ */
+router.post('/users/enroll', async (req, res) => {
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Valid user email required' });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const tenantId = req.tenant.id;
+
+  try {
+    // 1. Find or create in end_users
+    let endUserId;
+    const existing = await query(
+      `SELECT id FROM end_users WHERE tenant_id = $1 AND email = $2`,
+      [tenantId, normalizedEmail]
+    );
+
+    if (existing.rows.length > 0) {
+      endUserId = existing.rows[0].id;
+    } else {
+      endUserId = crypto.randomUUID();
+      await query(
+        `INSERT INTO end_users (id, tenant_id, email, two_factor_enabled)
+         VALUES ($1, $2, $3, false)`,
+        [endUserId, tenantId, normalizedEmail]
+      );
+    }
+
+    // 2. Also ensure presence in users table for device push resolution
+    let mainUserId;
+    const mainUserCheck = await query(`SELECT id FROM users WHERE email = $1`, [normalizedEmail]);
+    if (mainUserCheck.rows.length > 0) {
+      mainUserId = mainUserCheck.rows[0].id;
+    } else {
+      mainUserId = crypto.randomUUID();
+      const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
+      await query(
+        `INSERT INTO users (id, email, password_hash, two_factor_enabled)
+         VALUES ($1, $2, $3, false)`,
+        [mainUserId, normalizedEmail, dummyHash]
+      );
+    }
+
+    // 3. Generate TOTP secret & temporary enroll_token
+    const secret = generateTotpSecret();
+    const encryptedSecret = encryptAesGcm(secret);
+    const enrollToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    // Invalidate existing temporary tokens
+    await query(
+      `UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`,
+      [mainUserId]
+    );
+
+    await query(
+      `INSERT INTO enroll_tokens (id, user_id, token, totp_secret_temp, expires_at, used)
+       VALUES ($1, $2, $3, $4, $5, false)`,
+      [crypto.randomUUID(), mainUserId, enrollToken, JSON.stringify(encryptedSecret), expiresAt]
+    );
+
+    // Save temporary secret to end_user_totp as well
+    await query(
+      `INSERT INTO end_user_totp (id, end_user_id, encrypted_secret)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (end_user_id) DO UPDATE SET encrypted_secret = $3`,
+      [crypto.randomUUID(), endUserId, JSON.stringify(encryptedSecret)]
+    );
+
+    // 4. Resolve Server URL dynamically from request
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const forwardedHost = req.headers['x-forwarded-host'];
+    const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+    const host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
+    const serverUrl = host ? `${protocol}://${host}` : config.APP_URL;
+
+    const issuer = req.tenant.branding?.issuerName || req.tenant.name;
+
+    const qrPayload = {
+      server: serverUrl,
+      enroll_token: enrollToken,
+      secret,
+      account: normalizedEmail,
+      issuer,
+    };
+
+    const qrCodeDataUrl = await generateQrCodeDataUrl(qrPayload);
+
+    return res.status(200).json({
+      success: true,
+      endUserId,
+      email: normalizedEmail,
+      issuer,
+      enrollToken,
+      totpSecret: secret,
+      qrCodeDataUrl,
+      expiresAt: expiresAt.toISOString(),
+      message: 'Enrollment QR code generated successfully.',
+    });
+  } catch (err) {
+    console.error('[Tenant User Enroll Error]:', err);
+    return res.status(500).json({ error: 'Failed to initiate user enrollment' });
+  }
 });
 
 /**

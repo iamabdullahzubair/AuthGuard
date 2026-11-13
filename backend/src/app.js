@@ -58,13 +58,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(globalLimiter);
 
-// Service Worker custom headers for /pwa/sw.js
-app.use('/pwa/sw.js', (req, res, next) => {
-  res.setHeader('Service-Worker-Allowed', '/pwa/');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  next();
-});
-
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/enroll', enrollRoutes);
@@ -80,10 +73,6 @@ app.use('/api/super-admin', superAdminRoutes);
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-
-// Static assets for Authenticator PWA
-const pwaPath = path.resolve(__dirname, '../../pwa');
-app.use('/pwa', express.static(pwaPath));
 
 // Centralized 404 handler for API routes
 app.use('/api', (req, res) => {
