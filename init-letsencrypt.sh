@@ -16,9 +16,9 @@ echo "🔒 Setting up Let's Encrypt SSL for: $DOMAIN"
 echo "   Contact Email: $EMAIL"
 echo "=========================================================="
 
-# 1. Ensure docker containers are up with initial self-signed cert
+# 1. Ensure docker containers are up
 echo "1. Starting services (Nginx, App, Postgres)..."
-docker compose up -d postgres app nginx
+docker compose up -d postgres app nginx certbot
 
 # 2. Wait for Nginx to be ready
 echo "2. Waiting for Nginx to be accessible..."
@@ -35,17 +35,14 @@ docker compose run --rm --entrypoint "\
     --force-renewal \
     --non-interactive" certbot
 
-# 4. Copy generated certificates into Nginx SSL directory (dereferencing symlinks with cp -L)
+# 4. Copy generated certificates using docker cp (foolproof across all platforms)
 echo "4. Installing certificates into Nginx SSL directory..."
-docker compose exec -T nginx sh -c "\
-  cp -L /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/nginx/ssl/cert.pem && \
-  cp -L /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/nginx/ssl/key.pem && \
-  chmod 600 /etc/nginx/ssl/key.pem && \
-  chmod 644 /etc/nginx/ssl/cert.pem"
+docker cp auth_certbot:/etc/letsencrypt/live/$DOMAIN/fullchain.pem ./nginx/ssl/cert.pem
+docker cp auth_certbot:/etc/letsencrypt/live/$DOMAIN/privkey.pem ./nginx/ssl/key.pem
 
-# 5. Reload Nginx
-echo "5. Reloading Nginx with new trusted SSL certificate..."
-docker compose exec nginx nginx -s reload
+# 5. Restart Nginx to load the new SSL certificate
+echo "5. Restarting Nginx with new trusted SSL certificate..."
+docker compose restart nginx
 
 echo ""
 echo "=========================================================="
