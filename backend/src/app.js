@@ -17,6 +17,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Trust reverse proxy headers (localtunnel, ngrok, cloudflare)
+app.set('trust proxy', true);
+
 // Security Headers with Helmet
 app.use(
   helmet({

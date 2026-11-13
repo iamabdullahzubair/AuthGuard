@@ -53,9 +53,14 @@ router.post('/start', requireAuth, async (req, res) => {
     ]
   );
 
-  // Enrollment payload as specified in requirement:
-  // { "server": "<base url>", "enroll_token": "...", "secret": "BASE32", "account": "user@email.com", "issuer": "MyApp" }
-  const serverUrl = config.APP_URL;
+  // Dynamically resolve server URL from the current request
+  // (Works seamlessly with any tunnel, ngrok, cloudflare, or localhost without restarting server or touching .env)
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+  const host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
+  const serverUrl = host ? `${protocol}://${host}` : config.APP_URL;
+
   const qrPayload = {
     server: serverUrl,
     enroll_token: enrollToken,

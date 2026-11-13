@@ -1,14 +1,13 @@
 services:
+  # 1. PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: auth_postgres
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-authenticator_db}
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -16,7 +15,71 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - auth_net
+
+  # 2. Node.js Backend Application (Serving API, PWA, and Website)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth_app
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authenticator_db}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      AES_SECRET_KEY: ${AES_SECRET_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      APP_URL: ${APP_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - auth_net
+
+  # 3. Nginx Reverse Proxy with SSL (Port 80 & 443)
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: auth_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/www/certbot
+    depends_on:
+      - app
+    networks:
+      - auth_net
+
+  # 4. Certbot for Automated Let's Encrypt SSL Renewals
+  certbot:
+    image: certbot/certbot:latest
+    container_name: auth_certbot
+    restart: unless-stopped
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;"
+    depends_on:
+      - nginx
+    networks:
+      - auth_net
+
+networks:
+  auth_net:
+    driver: bridge
 
 volumes:
   pgdata:
-
+  certbot-etc:
+  certbot-var:
