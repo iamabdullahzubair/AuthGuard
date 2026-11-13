@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getStoredMember, getStoredToken } from '@/lib/api';
+import { getStoredMember, getStoredTenant, getStoredToken } from '@/lib/api';
 
 export default function RootPage() {
   const router = useRouter();
@@ -10,13 +10,14 @@ export default function RootPage() {
   useEffect(() => {
     const token = getStoredToken();
     const member = getStoredMember();
+    const tenant = getStoredTenant();
 
     if (!token || !member) {
-      router.push('/login');
-    } else if (member.isSuperAdmin) {
-      router.push('/super-admin');
+      router.replace('/login');
+    } else if (member.isSuperAdmin && !tenant) {
+      router.replace('/super-admin');
     } else {
-      router.push('/dashboard');
+      router.replace('/dashboard');
     }
   }, [router]);
 

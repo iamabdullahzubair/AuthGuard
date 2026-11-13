@@ -7,9 +7,7 @@ echo "🚀 Deploying AuthGuard Multi-Tenant Platform to AWS..."
 echo "========================================================"
 
 # Step 1: Discard local uncommitted overrides on server
-if [ -f init-letsencrypt.sh ]; then
-    git checkout init-letsencrypt.sh 2>/dev/null || true
-fi
+git checkout deploy.sh init-letsencrypt.sh 2>/dev/null || true
 
 # Step 2: Pull latest code & pre-compiled static assets
 echo "📥 Pulling latest code from GitHub..."
@@ -26,12 +24,21 @@ echo "⚡ Building & launching application containers..."
 docker compose up -d --build app
 docker compose up -d nginx certbot
 
-# Step 5: Ensure trusted Let's Encrypt certificates are active
+# Step 5: Automatically sync active Let's Encrypt certificates to Nginx
+CERT_DIR=""
 if docker ps | grep -q auth_certbot; then
-    docker exec auth_certbot cat /etc/letsencrypt/live/15.135.173.157.nip.io/fullchain.pem > ./nginx/ssl/cert.pem 2>/dev/null && \
-    docker exec auth_certbot cat /etc/letsencrypt/live/15.135.173.157.nip.io/privkey.pem > ./nginx/ssl/key.pem 2>/dev/null && \
-    docker compose restart nginx >/dev/null 2>&1 || true
+    CERT_DIR=$(docker exec auth_certbot sh -c 'ls -1 /etc/letsencrypt/live 2>/dev/null | grep -v README | head -n 1' 2>/dev/null || true)
+    if [ -n "$CERT_DIR" ]; then
+        echo "🔒 Syncing SSL certificates for domain: $CERT_DIR"
+        docker exec auth_certbot cat /etc/letsencrypt/live/$CERT_DIR/fullchain.pem > ./nginx/ssl/cert.pem 2>/dev/null || true
+        docker exec auth_certbot cat /etc/letsencrypt/live/$CERT_DIR/privkey.pem > ./nginx/ssl/key.pem 2>/dev/null || true
+        docker compose restart nginx >/dev/null 2>&1 || true
+    fi
 fi
+
+# Step 6: Determine Dynamic Public IP / Domain
+PUBLIC_IP=$(curl -s -m 3 http://checkip.amazonaws.com 2>/dev/null || curl -s -m 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+DOMAIN="${CERT_DIR:-${PUBLIC_IP}.nip.io}"
 
 echo ""
 echo "========================================================"
@@ -40,7 +47,8 @@ echo "========================================================"
 docker compose ps
 
 echo ""
+echo "========================================================"
 echo "✅ Deployment Successful!"
-echo "🌐 Platform URL: https://15.135.173.157.nip.io/login"
-echo "📱 Authenticator PWA: https://15.135.173.157.nip.io/pwa/"
+echo "🌐 Platform URL: https://${DOMAIN}/"
+echo "📱 Authenticator PWA: https://${DOMAIN}/pwa/"
 echo "========================================================"

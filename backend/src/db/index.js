@@ -316,9 +316,13 @@ export const initDb = async () => {
         CREATE INDEX IF NOT EXISTS idx_auth_challenges_status ON auth_challenges(status);
       `);
 
-      // Seed Super Admin: iamabdullahzubair@gmail.com
+      // Seed Super Admin from Environment Config
+      const adminEmail = (config.SUPER_ADMIN_EMAIL || 'iamabdullahzubair@gmail.com').toLowerCase().trim();
+      const adminPassword = config.SUPER_ADMIN_PASSWORD || 'Admin123!Secure';
+
       const superAdminCheck = await client.query(
-        `SELECT id FROM tenant_members WHERE email = 'iamabdullahzubair@gmail.com'`
+        `SELECT id FROM tenant_members WHERE email = $1`,
+        [adminEmail]
       );
       if (superAdminCheck.rows.length === 0) {
         const systemTenantId = 'tenant_system_default';
@@ -328,12 +332,18 @@ export const initDb = async () => {
           ON CONFLICT (id) DO NOTHING
         `, [systemTenantId]);
 
-        const defaultHash = await hashPassword('Admin123!Secure');
+        const defaultHash = await hashPassword(adminPassword);
         await client.query(`
           INSERT INTO tenant_members (id, tenant_id, email, password_hash, role, is_super_admin)
-          VALUES ($1, $2, 'iamabdullahzubair@gmail.com', $3, 'super_admin', true)
-        `, [crypto.randomUUID(), systemTenantId, defaultHash]);
-        console.log('[DB] Seeded Super Admin: iamabdullahzubair@gmail.com');
+          VALUES ($1, $2, $3, $4, 'super_admin', true)
+        `, [crypto.randomUUID(), systemTenantId, adminEmail, defaultHash]);
+        console.log(`[DB] Seeded Super Admin: ${adminEmail}`);
+      } else if (process.env.SUPER_ADMIN_PASSWORD) {
+        const updatedHash = await hashPassword(adminPassword);
+        await client.query(
+          `UPDATE tenant_members SET password_hash = $1 WHERE email = $2 AND is_super_admin = true`,
+          [updatedHash, adminEmail]
+        );
       }
 
       await client.query('COMMIT');

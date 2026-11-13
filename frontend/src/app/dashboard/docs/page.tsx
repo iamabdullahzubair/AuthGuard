@@ -8,8 +8,13 @@ export default function DocsPage() {
   const [activeTab, setActiveTab] = useState<'curl' | 'node' | 'python' | 'php' | 'go'>('curl');
   const [liveApiKey, setLiveApiKey] = useState('ag_live_YOUR_API_KEY');
   const [copied, setCopied] = useState<string | null>(null);
+  const [originUrl, setOriginUrl] = useState('https://auth.yourcompany.com');
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setOriginUrl(window.location.origin);
+    }
+
     // Attempt to load tenant's first live API key
     apiClient('/api/tenant/api-keys')
       .then((data) => {
@@ -31,7 +36,7 @@ export default function DocsPage() {
     curl: {
       title: 'cURL',
       enroll: `# 1. Enroll User & Generate Setup QR Code
-curl -X POST https://15.135.173.157.nip.io/api/v1/enroll \\
+curl -X POST ${originUrl}/api/v1/enroll \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -40,7 +45,7 @@ curl -X POST https://15.135.173.157.nip.io/api/v1/enroll \\
     "webhookUrl": "https://yourcompany.com/authguard-webhook"
   }'`,
       challenge: `# 2. Trigger Phishing-Resistant 2FA Push Challenge
-curl -X POST https://15.135.173.157.nip.io/api/v1/push/challenge \\
+curl -X POST ${originUrl}/api/v1/push/challenge \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -50,7 +55,7 @@ curl -X POST https://15.135.173.157.nip.io/api/v1/push/challenge \\
     node: {
       title: 'Node.js',
       enroll: `// 1. Enroll User
-const response = await fetch('https://15.135.173.157.nip.io/api/v1/enroll', {
+const response = await fetch('${originUrl}/api/v1/enroll', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -65,7 +70,7 @@ const response = await fetch('https://15.135.173.157.nip.io/api/v1/enroll', {
 const { qrCodeDataUrl, enrollToken } = await response.json();
 // Present qrCodeDataUrl image to your customer to scan with Authenticator PWA!`,
       challenge: `// 2. Trigger 2FA Push Challenge
-const challenge = await fetch('https://15.135.173.157.nip.io/api/v1/push/challenge', {
+const challenge = await fetch('${originUrl}/api/v1/push/challenge', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -82,7 +87,7 @@ console.log('Match number to display on web screen:', challenge.challengeNumber)
 
 # 1. Enroll User
 res = requests.post(
-    "https://15.135.173.157.nip.io/api/v1/enroll",
+    "${originUrl}/api/v1/enroll",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={
         "email": "customer@yourcompany.com",
@@ -96,7 +101,7 @@ print("QR Code Data URL:", data["qrCodeDataUrl"])`,
 
 # 2. Trigger 2FA Push Challenge
 res = requests.post(
-    "https://15.135.173.157.nip.io/api/v1/push/challenge",
+    "${originUrl}/api/v1/push/challenge",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={"email": "customer@yourcompany.com"}
 )
@@ -107,7 +112,7 @@ print("Display this number to user:", challenge["challengeNumber"])`,
       title: 'PHP',
       enroll: `<?php
 // 1. Enroll User
-$ch = curl_init('https://15.135.173.157.nip.io/api/v1/enroll');
+$ch = curl_init('${originUrl}/api/v1/enroll');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'Content-Type: application/json',
     'X-Api-Key: ${liveApiKey}'
@@ -122,7 +127,7 @@ $result = json_decode(curl_exec($ch), true);
 echo $result['qrCodeDataUrl'];`,
       challenge: `<?php
 // 2. Trigger 2FA Push Challenge
-$ch = curl_init('https://15.135.173.157.nip.io/api/v1/push/challenge');
+$ch = curl_init('${originUrl}/api/v1/push/challenge');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'Content-Type: application/json',
     'X-Api-Key: ${liveApiKey}'
@@ -150,7 +155,7 @@ func main() {
         "issuer": "YourApp",
         "webhookUrl": "https://yourcompany.com/authguard-webhook",
     })
-    req, _ := http.NewRequest("POST", "https://15.135.173.157.nip.io/api/v1/enroll", bytes.NewBuffer(payload))
+    req, _ := http.NewRequest("POST", "${originUrl}/api/v1/enroll", bytes.NewBuffer(payload))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("X-Api-Key", "${liveApiKey}")
 
@@ -170,7 +175,7 @@ func main() {
     payload, _ := json.Marshal(map[string]string{
         "email": "customer@yourcompany.com",
     })
-    req, _ := http.NewRequest("POST", "https://15.135.173.157.nip.io/api/v1/push/challenge", bytes.NewBuffer(payload))
+    req, _ := http.NewRequest("POST", "${originUrl}/api/v1/push/challenge", bytes.NewBuffer(payload))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("X-Api-Key", "${liveApiKey}")
 

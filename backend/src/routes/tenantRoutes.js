@@ -80,10 +80,6 @@ router.post('/register', authLimiter, async (req, res) => {
       [memberId, tenantId, normalizedEmail, passwordHash]
     );
 
-    // 3. Auto-generate Live & Test API Keys
-    const liveKey = await generateApiKey(tenantId, 'Default Live Key', 'live');
-    const testKey = await generateApiKey(tenantId, 'Default Test Key', 'test');
-
     const token = createMemberToken({
       memberId,
       tenantId,
@@ -97,14 +93,43 @@ router.post('/register', authLimiter, async (req, res) => {
       token,
       member: { id: memberId, email: normalizedEmail, role: 'owner', isSuperAdmin: false },
       tenant: { id: tenantId, name: companyName, slug: tenantSlug, tier: 'developer' },
-      initialKeys: {
-        liveKey: liveKey.rawKey,
-        testKey: testKey.rawKey,
-      },
     });
   } catch (err) {
     console.error('[Tenant Register Error]:', err);
     return res.status(500).json({ error: 'Registration failed. Please try again.' });
+  }
+});
+
+/**
+ * GET /api/tenant/resolve/:slug
+ * Public lookup for tenant white-label login screen
+ */
+router.get('/resolve/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const result = await query(
+      `SELECT id, name, slug, status, tier, branding FROM tenants WHERE slug = $1`,
+      [slug.toLowerCase().trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Tenant organization not found' });
+    }
+
+    const tenant = result.rows[0];
+    return res.json({
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        status: tenant.status,
+        tier: tenant.tier,
+        branding: typeof tenant.branding === 'string' ? JSON.parse(tenant.branding) : tenant.branding,
+      },
+    });
+  } catch (err) {
+    console.error('[Tenant Resolve Error]:', err);
+    return res.status(500).json({ error: 'Failed to resolve organization' });
   }
 });
 
@@ -187,6 +212,36 @@ router.get('/me', (req, res) => {
   return res.json({
     member: req.member,
     tenant: req.tenant,
+  });
+});
+
+/**
+ * POST /api/tenant/exit-impersonation
+ * Reverts Super Admin session back to Super Admin global panel
+ */
+router.post('/exit-impersonation', async (req, res) => {
+  if (!req.member.isSuperAdmin) {
+    return res.status(403).json({ error: 'Only Super Admin can exit impersonation mode' });
+  }
+
+  const token = createMemberToken({
+    memberId: req.member.id,
+    tenantId: 'tenant_system_default',
+    email: req.member.email,
+    role: 'super_admin',
+    isSuperAdmin: true,
+  });
+
+  return res.json({
+    success: true,
+    token,
+    member: {
+      id: req.member.id,
+      email: req.member.email,
+      role: 'super_admin',
+      isSuperAdmin: true,
+    },
+    tenant: null,
   });
 });
 

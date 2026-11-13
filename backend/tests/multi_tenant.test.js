@@ -84,12 +84,23 @@ describe('Enterprise Multi-Tenant Engine & Security', () => {
     assert.ok(data.token);
     assert.equal(data.member.email, testOwnerEmail);
     assert.equal(data.tenant.slug, testTenantSlug);
-    assert.ok(data.initialKeys.liveKey.startsWith('ag_live_'));
-    assert.ok(data.initialKeys.testKey.startsWith('ag_test_'));
 
     tenantId = data.tenant.id;
     tenantToken = data.token;
-    liveApiKey = data.initialKeys.liveKey;
+
+    // Tenant generates API key manually
+    const keyRes = await fetch(`${BASE_URL}/api/tenant/api-keys`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tenantToken}`,
+      },
+      body: JSON.stringify({ name: 'Production Live Key', environment: 'live' }),
+    });
+    assert.equal(keyRes.status, 201);
+    const keyData = await keyRes.json();
+    assert.ok(keyData.key.rawKey.startsWith('ag_live_'));
+    liveApiKey = keyData.key.rawKey;
   });
 
   test('3. Tenant Member Login (POST /api/tenant/login)', async () => {
@@ -172,5 +183,33 @@ describe('Enterprise Multi-Tenant Engine & Security', () => {
     const tenantsData = await tenantsRes.json();
     assert.ok(Array.isArray(tenantsData.tenants));
     assert.ok(tenantsData.tenants.some((t) => t.id === tenantId));
+  });
+
+  test('7. Super Admin Impersonation of Tenant & Exit Flow', async () => {
+    // Impersonate tenant
+    const impRes = await fetch(`${BASE_URL}/api/super-admin/impersonate/${tenantId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${superAdminToken}` },
+    });
+    assert.equal(impRes.status, 200);
+    const impData = await impRes.json();
+    assert.equal(impData.tenant.id, tenantId);
+    assert.equal(impData.member.isSuperAdmin, true);
+
+    // Impersonated session can access tenant stats
+    const tStatsRes = await fetch(`${BASE_URL}/api/tenant/stats`, {
+      headers: { Authorization: `Bearer ${impData.token}` },
+    });
+    assert.equal(tStatsRes.status, 200);
+
+    // Exit impersonation
+    const exitRes = await fetch(`${BASE_URL}/api/tenant/exit-impersonation`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${impData.token}` },
+    });
+    assert.equal(exitRes.status, 200);
+    const exitData = await exitRes.json();
+    assert.equal(exitData.member.isSuperAdmin, true);
+    assert.equal(exitData.tenant, null);
   });
 });

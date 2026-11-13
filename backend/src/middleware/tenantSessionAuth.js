@@ -114,20 +114,43 @@ export async function tenantSessionAuth(req, res, next) {
     return res.status(403).json({ error: 'Tenant workspace is suspended' });
   }
 
+  const effectiveTenantId = decoded.tenantId || row.tenant_id;
+  let tenantData = null;
+  if (effectiveTenantId) {
+    if (effectiveTenantId === row.tenant_id) {
+      tenantData = {
+        id: row.tenant_id,
+        name: row.tenant_name,
+        slug: row.tenant_slug,
+        tier: row.tier,
+        branding: typeof row.branding === 'string' ? JSON.parse(row.branding) : row.branding,
+      };
+    } else {
+      const targetTenantRes = await query(
+        `SELECT id, name, slug, status, tier, branding FROM tenants WHERE id = $1`,
+        [effectiveTenantId]
+      );
+      if (targetTenantRes.rows.length > 0) {
+        const t = targetTenantRes.rows[0];
+        tenantData = {
+          id: t.id,
+          name: t.name,
+          slug: t.slug,
+          tier: t.tier,
+          branding: typeof t.branding === 'string' ? JSON.parse(t.branding) : t.branding,
+        };
+      }
+    }
+  }
+
   req.member = {
     id: row.member_id,
     email: row.email,
     role: row.role,
-    isSuperAdmin: Boolean(row.is_super_admin),
+    isSuperAdmin: Boolean(row.is_super_admin || decoded.isSuperAdmin),
   };
 
-  req.tenant = row.tenant_id ? {
-    id: row.tenant_id,
-    name: row.tenant_name,
-    slug: row.tenant_slug,
-    tier: row.tier,
-    branding: typeof row.branding === 'string' ? JSON.parse(row.branding) : row.branding,
-  } : null;
+  req.tenant = tenantData;
 
   next();
 }

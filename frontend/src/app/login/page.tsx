@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Shield, Lock, Mail, ArrowRight, Loader2, Sparkles } from 'lucide-react';
+import { Shield, Lock, Mail, ArrowRight, Loader2, Building2 } from 'lucide-react';
 import { apiClient, setStoredAuth } from '@/lib/api';
 
 export default function LoginPage() {
@@ -12,6 +12,27 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tenantSlug, setTenantSlug] = useState<string | null>(null);
+  const [tenantInfo, setTenantInfo] = useState<{ name: string; slug: string } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const slug = params.get('tenant');
+      if (slug) {
+        setTenantSlug(slug);
+        apiClient(`/api/tenant/resolve/${slug}`)
+          .then((res) => {
+            if (res.tenant) {
+              setTenantInfo(res.tenant);
+            }
+          })
+          .catch(() => {
+            // Non-fatal if slug doesn't exist
+          });
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,11 +59,6 @@ export default function LoginPage() {
     }
   };
 
-  const fillSuperAdmin = () => {
-    setEmail('iamabdullahzubair@gmail.com');
-    setPassword('Admin123!Secure');
-  };
-
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4 selection:bg-blue-600 selection:text-white">
       {/* Background glow */}
@@ -55,6 +71,13 @@ export default function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">AuthGuard Cloud</h1>
           <p className="text-sm text-slate-400 mt-1">Enterprise Multi-Tenant 2FA & Push Authentication</p>
+
+          {tenantInfo && (
+            <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-blue-500/30 text-xs text-blue-300">
+              <Building2 className="h-3.5 w-3.5 text-blue-400" />
+              <span>Workspace: <strong>{tenantInfo.name}</strong></span>
+            </div>
+          )}
         </div>
 
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-7 shadow-2xl backdrop-blur-xl">
@@ -118,19 +141,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Quick Pre-fill for Developer Ease */}
-          <div className="mt-6 pt-5 border-t border-slate-800/80">
-            <button
-              type="button"
-              onClick={fillSuperAdmin}
-              className="w-full py-2 px-3 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-amber-400 font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Fill Super Admin (iamabdullahzubair@gmail.com)</span>
-            </button>
-          </div>
-
-          <div className="mt-5 text-center text-xs text-slate-400">
+          <div className="mt-6 pt-5 border-t border-slate-800/80 text-center text-xs text-slate-400">
             Need an enterprise client tenant?{' '}
             <Link href="/register" className="text-blue-400 hover:text-blue-300 font-semibold underline underline-offset-4">
               Register New Organization

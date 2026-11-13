@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
-import { tenantSessionAuth, requireSuperAdmin } from '../middleware/tenantSessionAuth.js';
-import { generateApiKey } from '../services/apiKeyService.js';
+import { tenantSessionAuth, requireSuperAdmin, createMemberToken } from '../middleware/tenantSessionAuth.js';
 import { hashPassword } from '../services/cryptoService.js';
 
 const router = Router();
@@ -108,19 +107,74 @@ router.post('/tenants', async (req, res) => {
       [memberId, tenantId, ownerEmail.toLowerCase().trim(), passwordHash]
     );
 
-    const liveKey = await generateApiKey(tenantId, 'Primary Live Key', 'live');
-
     return res.status(201).json({
       success: true,
       tenantId,
       name,
       slug: tenantSlug,
       ownerEmail,
-      apiKey: liveKey.rawKey,
     });
   } catch (err) {
     console.error('[Super Admin Create Tenant Error]:', err);
     return res.status(500).json({ error: err.message || 'Failed to create tenant' });
+  }
+});
+
+/**
+ * POST /api/super-admin/impersonate/:tenantId
+ * Super Admin switches into any tenant dashboard directly
+ */
+router.post('/impersonate/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+
+  try {
+    const tenantRes = await query(`SELECT * FROM tenants WHERE id = $1`, [tenantId]);
+    if (tenantRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+    const tenant = tenantRes.rows[0];
+
+    // Find tenant owner
+    const memberRes = await query(
+      `SELECT * FROM tenant_members WHERE tenant_id = $1 ORDER BY created_at ASC LIMIT 1`,
+      [tenantId]
+    );
+
+    const targetMember = memberRes.rows[0] || {
+      id: req.member.id,
+      email: req.member.email,
+      role: 'owner',
+    };
+
+    // Issue a session token scoped to this tenant, keeping Super Admin identity & privileges
+    const token = createMemberToken({
+      memberId: req.member.id,
+      tenantId: tenant.id,
+      email: req.member.email,
+      role: 'owner',
+      isSuperAdmin: true,
+    });
+
+    return res.json({
+      success: true,
+      token,
+      member: {
+        id: req.member.id,
+        email: req.member.email,
+        role: 'owner',
+        isSuperAdmin: true,
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        tier: tenant.tier,
+        branding: typeof tenant.branding === 'string' ? JSON.parse(tenant.branding) : tenant.branding,
+      },
+    });
+  } catch (err) {
+    console.error('[Impersonate Tenant Error]:', err);
+    return res.status(500).json({ error: 'Failed to impersonate tenant' });
   }
 });
 

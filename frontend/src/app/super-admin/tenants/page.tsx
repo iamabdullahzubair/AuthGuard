@@ -1,13 +1,16 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Building, Plus, Loader2 } from 'lucide-react';
-import { apiClient } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { Building, Plus, Loader2, ExternalLink, Copy, Check, Globe } from 'lucide-react';
+import { apiClient, setStoredAuth } from '@/lib/api';
 
 export default function SuperAdminTenantsPage() {
+  const router = useRouter();
   const [tenants, setTenants] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
 
   // New Tenant Form
   const [name, setName] = useState('');
@@ -32,6 +35,26 @@ export default function SuperAdminTenantsPage() {
   useEffect(() => {
     fetchTenants();
   }, []);
+
+  const handleEnterTenant = async (tenantId: string) => {
+    try {
+      const res = await apiClient(`/api/super-admin/impersonate/${tenantId}`, {
+        method: 'POST',
+      });
+      setStoredAuth(res.token, res.member, res.tenant);
+      router.push('/dashboard');
+    } catch (err: any) {
+      alert(err.message || 'Failed to enter tenant workspace');
+    }
+  };
+
+  const copyTenantUrl = (tenantSlug: string) => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const url = `${origin}/login?tenant=${tenantSlug}`;
+    navigator.clipboard.writeText(url);
+    setCopiedSlug(tenantSlug);
+    setTimeout(() => setCopiedSlug(null), 2000);
+  };
 
   const handleToggleStatus = async (tenantId: string, currentStatus: string) => {
     const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
@@ -71,7 +94,7 @@ export default function SuperAdminTenantsPage() {
         body: JSON.stringify({ name, slug, ownerEmail, initialPassword, tier }),
       });
 
-      setCreatedResult(res);
+      setCreatedResult({ ...res, initialPassword });
       setName('');
       setSlug('');
       setOwnerEmail('');
@@ -82,6 +105,8 @@ export default function SuperAdminTenantsPage() {
       setSubmitting(false);
     }
   };
+
+  const getOrigin = () => (typeof window !== 'undefined' ? window.location.origin : '');
 
   return (
     <div className="space-y-6">
@@ -123,11 +148,21 @@ export default function SuperAdminTenantsPage() {
             {tenants.map((t) => (
               <div key={t.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-850/50 transition-colors">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-white text-sm">{t.name}</span>
-                    <code className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                      /{t.slug}
-                    </code>
+                    <button
+                      onClick={() => copyTenantUrl(t.slug)}
+                      title="Copy dedicated tenant login link"
+                      className="inline-flex items-center gap-1.5 text-[11px] font-mono text-slate-400 bg-slate-950 hover:bg-slate-800 hover:text-white px-2 py-0.5 rounded border border-slate-800 transition-colors"
+                    >
+                      <Globe className="h-3 w-3 text-blue-400" />
+                      <span>/{t.slug}</span>
+                      {copiedSlug === t.slug ? (
+                        <Check className="h-3 w-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3 w-3 text-slate-500" />
+                      )}
+                    </button>
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
                         t.status === 'active'
@@ -146,7 +181,15 @@ export default function SuperAdminTenantsPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <button
+                    onClick={() => handleEnterTenant(t.id)}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-3 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>Enter Dashboard</span>
+                  </button>
+
                   <select
                     value={t.tier}
                     onChange={(e) => handleChangeTier(t.id, e.target.value)}
@@ -185,24 +228,49 @@ export default function SuperAdminTenantsPage() {
 
             {createdResult ? (
               <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-800 text-xs text-emerald-300 space-y-2">
-                  <div className="font-bold text-sm">Tenant Provisioned Successfully!</div>
+                <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-800 text-xs text-emerald-300 space-y-2.5">
+                  <div className="font-bold text-sm">Organization Provisioned Successfully!</div>
                   <div><strong>Name:</strong> {createdResult.name}</div>
-                  <div><strong>Slug:</strong> /{createdResult.slug}</div>
                   <div><strong>Owner Email:</strong> {createdResult.ownerEmail}</div>
-                  <div><strong>Initial Live API Key:</strong></div>
-                  <code className="block p-2 rounded bg-slate-950 text-white font-mono break-all border border-slate-800">
-                    {createdResult.apiKey}
-                  </code>
+                  <div><strong>Initial Password:</strong> <code className="bg-slate-950 px-1.5 py-0.5 rounded text-white">{createdResult.initialPassword}</code></div>
+                  
+                  <div className="pt-2 border-t border-emerald-800/60">
+                    <div className="text-[11px] font-semibold text-emerald-200 mb-1">Tenant Dedicated Login Link:</div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        readOnly
+                        value={`${getOrigin()}/login?tenant=${createdResult.slug}`}
+                        className="flex-1 bg-slate-950 border border-emerald-800/80 rounded-lg px-2.5 py-1 font-mono text-[11px] text-white select-all"
+                      />
+                      <button
+                        onClick={() => copyTenantUrl(createdResult.slug)}
+                        className="bg-emerald-700 hover:bg-emerald-600 text-white px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 shrink-0"
+                      >
+                        {copiedSlug === createdResult.slug ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                        <span>{copiedSlug === createdResult.slug ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-xl text-xs font-semibold"
-                >
-                  Close
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleEnterTenant(createdResult.tenantId)}
+                    className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>Open Dashboard Directly</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-semibold"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             ) : (
               <form onSubmit={handleCreateTenant} className="space-y-3">
@@ -222,11 +290,11 @@ export default function SuperAdminTenantsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Tenant Slug</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Tenant Slug (Identifier)</label>
                   <input
                     type="text"
                     value={slug}
-                    onChange={(e) => setSlug(e.target.value)}
+                    onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                     placeholder="fintech-global"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
@@ -242,6 +310,17 @@ export default function SuperAdminTenantsPage() {
                     placeholder="admin@fintechglobal.com"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Initial Password</label>
+                  <input
+                    type="text"
+                    value={initialPassword}
+                    onChange={(e) => setInitialPassword(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
                   />
                 </div>
 

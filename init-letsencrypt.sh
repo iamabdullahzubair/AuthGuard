@@ -3,12 +3,17 @@
 set -e
 
 if [ "$#" -lt 1 ]; then
-    echo "Usage: ./init-letsencrypt.sh <your-domain.com> [your-email@example.com]"
-    echo "Example: ./init-letsencrypt.sh 15.135.173.157.nip.io admin@example.com"
-    exit 1
+    AUTO_IP=$(curl -s -m 3 http://checkip.amazonaws.com 2>/dev/null || curl -s -m 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    if [ -n "$AUTO_IP" ]; then
+        DOMAIN="${AUTO_IP}.nip.io"
+        echo "Auto-detected server domain: $DOMAIN"
+    else
+        echo "Usage: ./init-letsencrypt.sh <your-domain.com> [your-email@example.com]"
+        exit 1
+    fi
+else
+    DOMAIN="$1"
 fi
-
-DOMAIN="$1"
 EMAIL="${2:-admin@$DOMAIN}"
 
 echo "=========================================================="

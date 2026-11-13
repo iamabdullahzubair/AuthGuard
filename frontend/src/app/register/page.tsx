@@ -39,7 +39,7 @@ export default function RegisterPage() {
       });
 
       setStoredAuth(res.token, res.member, res.tenant);
-      router.push('/dashboard/api-keys');
+      router.push('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
     } finally {
@@ -135,8 +135,8 @@ export default function RegisterPage() {
             </div>
 
             <div className="p-3 bg-blue-950/30 border border-blue-900/40 rounded-xl text-xs text-blue-300 flex items-start gap-2.5">
-              <Key className="h-4 w-4 text-blue-400 shrink-0 mt-0.5" />
-              <span>Two API Keys (<code className="font-mono text-white">ag_live_...</code> and <code className="font-mono text-white">ag_test_...</code>) will be generated automatically for your account.</span>
+              <Shield className="h-4 w-4 text-blue-400 shrink-0 mt-0.5" />
+              <span>Your tenant workspace will be provisioned instantly. You can generate and configure your API keys manually from your dashboard.</span>
             </div>
 
             <button

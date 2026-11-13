@@ -81,12 +81,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Static assets for PWA and Website
+// Static assets for Authenticator PWA
 const pwaPath = path.resolve(__dirname, '../../pwa');
-const websitePath = path.resolve(__dirname, '../../website');
-
 app.use('/pwa', express.static(pwaPath));
-app.use('/', express.static(websitePath));
 
 // Centralized 404 handler for API routes
 app.use('/api', (req, res) => {
