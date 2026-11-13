@@ -19,8 +19,9 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# Step 4: Build & Launch all containers (app, nginx, postgres, certbot)
+# Step 4: Build & Launch all containers (postgres, redis, app, nginx, certbot)
 echo "⚡ Building & launching application containers..."
+docker compose up -d postgres redis
 docker compose up -d --build app
 docker compose up -d nginx certbot
 

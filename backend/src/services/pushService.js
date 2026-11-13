@@ -1,5 +1,6 @@
 import { webpush } from '../config/index.js';
 import { query } from '../db/index.js';
+import { broadcastLog } from './logBroadcaster.js';
 
 /**
  * Send Web Push notification to user devices
@@ -53,6 +54,13 @@ export async function sendPushToUser(userId, payload) {
       }
     }
   }
+
+  broadcastLog({
+    level: sent > 0 ? 'PUSH' : 'WARN',
+    category: 'push',
+    message: `Web Push dispatch: sent to ${sent} device(s), ${failed} failed for user ${userId.slice(0, 8)}...`,
+    metadata: { userId, sent, failed },
+  });
 
   return { sent, failed };
 }

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
+import { cacheGet, cacheSet, cacheDel } from './redisService.js';
 
 /**
  * Hash raw API key using SHA-256
@@ -49,6 +50,17 @@ export async function verifyApiKey(rawKey) {
   if (!rawKey || typeof rawKey !== 'string') return null;
 
   const keyHash = hashApiKey(rawKey.trim());
+  const cacheKey = `apikey:${keyHash}`;
+
+  // Check Redis cache first (sub-millisecond resolution)
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    if (cached.error) return cached;
+    // Async update last_used_at without awaiting
+    query(`UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, [cached.keyId]).catch(() => {});
+    return cached;
+  }
+
   const res = await query(
     `SELECT ak.id as key_id, ak.name as key_name, ak.environment, ak.is_active,
             t.id as tenant_id, t.name as tenant_name, t.slug as tenant_slug,
@@ -63,13 +75,15 @@ export async function verifyApiKey(rawKey) {
   const row = res.rows[0];
 
   if (row.tenant_status !== 'active') {
-    return { error: 'TENANT_SUSPENDED' };
+    const errorPayload = { error: 'TENANT_SUSPENDED' };
+    await cacheSet(cacheKey, errorPayload, 60);
+    return errorPayload;
   }
 
   // Update last_used_at asynchronously
   query(`UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, [row.key_id]).catch(() => {});
 
-  return {
+  const payload = {
     keyId: row.key_id,
     keyName: row.key_name,
     environment: row.environment,
@@ -81,6 +95,11 @@ export async function verifyApiKey(rawKey) {
       branding: typeof row.branding === 'string' ? JSON.parse(row.branding) : row.branding,
     },
   };
+
+  // Cache in Redis for 5 minutes
+  await cacheSet(cacheKey, payload, 300);
+
+  return payload;
 }
 
 /**
@@ -88,10 +107,15 @@ export async function verifyApiKey(rawKey) {
  */
 export async function revokeApiKey(tenantId, keyId) {
   const res = await query(
-    `UPDATE api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+    `UPDATE api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2 RETURNING id, key_hash`,
     [keyId, tenantId]
   );
-  return res.rows.length > 0;
+  if (res.rows.length > 0) {
+    // Purge from Redis cache immediately
+    await cacheDel(`apikey:${res.rows[0].key_hash}`);
+    return true;
+  }
+  return false;
 }
 
 /**

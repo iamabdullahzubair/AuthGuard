@@ -85,6 +85,11 @@ export async function tenantSessionAuth(req, res, next) {
     token = req.cookies.ag_token;
   }
 
+  // Support token in query parameter for EventSource / SSE connections
+  if (!token && req.query && req.query.token) {
+    token = req.query.token;
+  }
+
   if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Session required' });
   }

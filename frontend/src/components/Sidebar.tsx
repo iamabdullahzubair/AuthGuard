@@ -14,6 +14,7 @@ import {
   Crown,
   LogOut,
   Building,
+  Terminal,
 } from 'lucide-react';
 import { getStoredMember, getStoredTenant, clearStoredAuth, Member, Tenant } from '@/lib/api';
 
@@ -47,6 +48,7 @@ export default function Sidebar() {
   const superAdminNav = [
     { name: 'Platform Overview', href: '/super-admin', icon: Crown },
     { name: 'All Tenants', href: '/super-admin/tenants', icon: Building },
+    { name: 'Live Logs', href: '/super-admin/logs', icon: Terminal },
   ];
 
   const currentNav = isSuperAdminView ? superAdminNav : tenantNav;

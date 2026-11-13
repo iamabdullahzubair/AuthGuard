@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { query } from '../db/index.js';
 import { tenantSessionAuth, requireSuperAdmin, createMemberToken } from '../middleware/tenantSessionAuth.js';
 import { hashPassword } from '../services/cryptoService.js';
+import { getRecentLogs, onLog, getLogStreamStats } from '../services/logBroadcaster.js';
+import { isRedisReady } from '../services/redisService.js';
 
 const router = Router();
 
@@ -229,6 +231,89 @@ router.get('/audit-logs', async (req, res) => {
      ORDER BY al.created_at DESC LIMIT 50`
   );
   return res.json({ logs: result.rows });
+});
+
+/**
+ * GET /api/super-admin/logs/stream
+ * Server-Sent Events (SSE) live streaming log feed for Super Admin
+ */
+router.get('/logs/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Instructs Nginx not to buffer SSE chunks
+  });
+
+  // Flush headers if supported
+  if (res.flushHeaders) {
+    res.flushHeaders();
+  }
+
+  // Send initial batch of recent buffered logs
+  const initialLogs = getRecentLogs(60);
+  res.write(`event: initial\ndata: ${JSON.stringify(initialLogs)}\n\n`);
+
+  // Listener for real-time live events
+  const handleLog = (entry) => {
+    try {
+      res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
+    } catch {
+      // Socket may be closed
+    }
+  };
+
+  const unsubscribe = onLog(handleLog);
+
+  // Keep-alive heartbeat comment every 15 seconds
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
+
+/**
+ * GET /api/super-admin/logs
+ * REST endpoint returning recent buffered logs
+ */
+router.get('/logs', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
+  const logs = getRecentLogs(limit);
+  const stats = getLogStreamStats();
+  return res.json({
+    logs,
+    stats,
+    redis: {
+      connected: isRedisReady(),
+    },
+  });
+});
+
+/**
+ * GET /api/super-admin/system/status
+ * Platform system status including Redis, DB and memory usage
+ */
+router.get('/system/status', (req, res) => {
+  const mem = process.memoryUsage();
+  return res.json({
+    nodeVersion: process.version,
+    uptimeSeconds: Math.round(process.uptime()),
+    redisConnected: isRedisReady(),
+    memory: {
+      rssMb: Math.round(mem.rss / (1024 * 1024)),
+      heapUsedMb: Math.round(mem.heapUsed / (1024 * 1024)),
+      heapTotalMb: Math.round(mem.heapTotal / (1024 * 1024)),
+    },
+    stats: getLogStreamStats(),
+  });
 });
 
 export default router;

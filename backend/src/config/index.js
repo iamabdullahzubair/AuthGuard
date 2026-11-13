@@ -21,6 +21,7 @@ const envSchema = z.object({
   VAPID_SUBJECT: z.string().default('mailto:admin@example.com'),
   AES_SECRET_KEY: z.string().length(64, 'AES_SECRET_KEY must be 64 hex characters (32 bytes)'),
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 chars'),
+  REDIS_URL: z.string().optional().default('redis://localhost:6379'),
   SUPER_ADMIN_EMAIL: z.string().email().default('iamabdullahzubair@gmail.com'),
   SUPER_ADMIN_PASSWORD: z.string().min(8).default('Admin123!Secure'),
   RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(val => parseInt(val, 10)),

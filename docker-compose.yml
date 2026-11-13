@@ -18,7 +18,23 @@ services:
     networks:
       - auth_net
 
-  # 2. Node.js Backend Application (Serving API, PWA, and Website)
+  # 2. Redis In-Memory Cache & Pub/Sub
+  redis:
+    image: redis:7-alpine
+    container_name: auth_redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - auth_net
+
+  # 3. Node.js Backend Application (Serving API, PWA, and Website)
   app:
     build:
       context: .
@@ -29,6 +45,7 @@ services:
       NODE_ENV: production
       PORT: 3001
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authenticator_db}
+      REDIS_URL: redis://redis:6379
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
@@ -39,6 +56,8 @@ services:
       APP_URL: ${APP_URL:-}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - auth_net
@@ -84,5 +103,6 @@ networks:
 
 volumes:
   pgdata:
+  redisdata:
   certbot-etc:
   certbot-var:

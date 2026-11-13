@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
+import { broadcastLog } from './logBroadcaster.js';
 
 /**
  * Log a security-critical audit event without logging secrets or credentials
@@ -36,6 +37,15 @@ export async function logAuditEvent({ userId = null, event, req = null, metadata
         JSON.stringify(cleanMeta),
       ]
     );
+
+    // Broadcast in real-time to Super Admin live logs
+    const isSecurity = event.includes('FAIL') || event.includes('REVOKE') || event.includes('LOCKOUT');
+    broadcastLog({
+      level: isSecurity ? 'SECURITY' : 'AUTH',
+      category: 'audit',
+      message: `Audit Event: ${event}${userId ? ` (user: ${userId.slice(0, 8)}...)` : ''}`,
+      metadata: { event, userId, ip, ...cleanMeta },
+    });
   } catch (err) {
     console.error('[Audit Log Error]', err.message);
   }
