@@ -4,7 +4,7 @@ set -e
 
 if [ "$#" -lt 1 ]; then
     echo "Usage: ./init-letsencrypt.sh <your-domain.com> [your-email@example.com]"
-    echo "Example: ./init-letsencrypt.sh auth.example.com admin@example.com"
+    echo "Example: ./init-letsencrypt.sh 15.135.173.157.nip.io admin@example.com"
     exit 1
 fi
 
@@ -16,15 +16,15 @@ echo "🔒 Setting up Let's Encrypt SSL for: $DOMAIN"
 echo "   Contact Email: $EMAIL"
 echo "=========================================================="
 
-# Ensure docker containers are up with initial self-signed cert
+# 1. Ensure docker containers are up with initial self-signed cert
 echo "1. Starting services (Nginx, App, Postgres)..."
 docker compose up -d postgres app nginx
 
-# Wait for Nginx to be ready
+# 2. Wait for Nginx to be ready
 echo "2. Waiting for Nginx to be accessible..."
 sleep 5
 
-# Request certificate from Let's Encrypt using Certbot webroot mode
+# 3. Request certificate from Let's Encrypt using Certbot webroot mode
 echo "3. Requesting certificate from Let's Encrypt..."
 docker compose run --rm --entrypoint "\
   certbot certonly --webroot -w /var/www/certbot \
@@ -35,13 +35,15 @@ docker compose run --rm --entrypoint "\
     --force-renewal \
     --non-interactive" certbot
 
-# Copy generated certificates to nginx/ssl
+# 4. Copy generated certificates into Nginx SSL directory (dereferencing symlinks with cp -L)
 echo "4. Installing certificates into Nginx SSL directory..."
-docker compose run --rm --entrypoint "\
-  sh -c 'cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/nginx/ssl/cert.pem && \
-         cp /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/nginx/ssl/key.pem'" nginx
+docker compose exec -T nginx sh -c "\
+  cp -L /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/nginx/ssl/cert.pem && \
+  cp -L /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/nginx/ssl/key.pem && \
+  chmod 600 /etc/nginx/ssl/key.pem && \
+  chmod 644 /etc/nginx/ssl/cert.pem"
 
-# Reload Nginx
+# 5. Reload Nginx
 echo "5. Reloading Nginx with new trusted SSL certificate..."
 docker compose exec nginx nginx -s reload
 
