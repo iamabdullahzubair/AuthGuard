@@ -76,4 +76,50 @@ describe('Webhooks & External Client Enrollment API', () => {
     assert.ok(data.enrollToken);
     assert.ok(data.totpSecret);
   });
+
+  test('External Client Push Challenge API flow', async () => {
+    // 1. Trying to challenge a user with no devices returns 400
+    const failRes = await fetch(`${BASE_URL}/api/v1/push/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: testEmail }),
+    });
+    assert.equal(failRes.status, 400);
+
+    // 2. Add a mock active device for this user
+    const deviceId = crypto.randomUUID();
+    await query(
+      `INSERT INTO devices (id, user_id, device_name, push_subscription, public_key, status)
+       VALUES ($1, $2, 'Test Phone', '{"endpoint":"https://fcm.googleapis.com/test","keys":{"auth":"auth","p256dh":"BLPtAvw5yivoAEZShN6auQ1GwcBfGvoNLjNCIHw64y0dYPTrP5strzCMwp_z84X0pgFww8n3FRzBj-LpOusWjf4"}}', '{"crv":"P-256","kty":"EC","x":"test","y":"test"}', 'active')`,
+      [deviceId, userId]
+    );
+
+    // 3. Initiate push challenge
+    const challengeRes = await fetch(`${BASE_URL}/api/v1/push/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: testEmail,
+        issuer: 'BankClient',
+      }),
+    });
+
+    assert.equal(challengeRes.status, 200);
+    const challengeData = await challengeRes.json();
+    assert.equal(challengeData.success, true);
+    assert.ok(challengeData.requestId);
+    assert.ok(challengeData.challengeNumber >= 10 && challengeData.challengeNumber <= 99);
+
+    // 4. Poll status endpoint
+    const statusRes = await fetch(`${BASE_URL}/api/v1/push/status/${challengeData.requestId}`);
+    assert.equal(statusRes.status, 200);
+    const statusData = await statusRes.json();
+    assert.equal(statusData.requestId, challengeData.requestId);
+    assert.equal(statusData.status, 'pending');
+    assert.equal(statusData.isApproved, false);
+
+    // Clean up
+    await query(`DELETE FROM login_requests WHERE user_id = $1`, [userId]).catch(() => {});
+    await query(`DELETE FROM devices WHERE user_id = $1`, [userId]).catch(() => {});
+  });
 });

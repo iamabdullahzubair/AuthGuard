@@ -555,6 +555,67 @@ if (apiTesterForm) {
   });
 }
 
+// Bind External Push Trigger Tester Form
+let pushPollTimer = null;
+const pushTriggerForm = document.getElementById('push-trigger-form');
+if (pushTriggerForm) {
+  pushTriggerForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (pushPollTimer) clearInterval(pushPollTimer);
+
+    const email = document.getElementById('push-trigger-email').value.trim();
+    const issuer = document.getElementById('push-trigger-issuer').value.trim() || 'AuthGuard';
+
+    const resultBox = document.getElementById('push-trigger-result-box');
+    const challengeNumEl = document.getElementById('push-trigger-challenge-number');
+    const statusEl = document.getElementById('push-trigger-status');
+    const reqIdEl = document.getElementById('push-trigger-req-id');
+
+    challengeNumEl.textContent = '...';
+    statusEl.textContent = 'Sending push notification...';
+    statusEl.style.color = '#f59e0b';
+    resultBox.style.display = 'block';
+
+    try {
+      const res = await api('/api/v1/push/challenge', {
+        method: 'POST',
+        body: JSON.stringify({ email, issuer }),
+      });
+
+      challengeNumEl.textContent = res.challengeNumber;
+      reqIdEl.textContent = res.requestId;
+      statusEl.textContent = `Push sent! (${res.devicesNotified} device notified). Waiting for user approval on PWA...`;
+      statusEl.style.color = '#38bdf8';
+
+      // Start polling status
+      const requestId = res.requestId;
+      pushPollTimer = setInterval(async () => {
+        try {
+          const statusRes = await api(`/api/v1/push/status/${requestId}`);
+          if (statusRes.status === 'approved') {
+            clearInterval(pushPollTimer);
+            statusEl.textContent = '🎉 2FA Challenge Approved by user!';
+            statusEl.style.color = '#34d399';
+          } else if (statusRes.status === 'denied') {
+            clearInterval(pushPollTimer);
+            statusEl.textContent = '❌ 2FA Challenge Denied by user.';
+            statusEl.style.color = '#f87171';
+          } else if (statusRes.status === 'expired') {
+            clearInterval(pushPollTimer);
+            statusEl.textContent = '⏱️ Challenge Expired (60s limit).';
+            statusEl.style.color = '#94a3b8';
+          }
+        } catch {
+          // ignore transient poll error
+        }
+      }, 1500);
+    } catch (err) {
+      statusEl.textContent = 'Error: ' + err.message;
+      statusEl.style.color = '#f87171';
+    }
+  });
+}
+
 // Bootstrap
 init();
 

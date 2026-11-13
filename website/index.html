@@ -150,6 +150,39 @@
         </div>
       </div>
 
+      <!-- Developer API: Trigger Push Challenge Tester -->
+      <div class="card" style="border-left: 4px solid #10b981;">
+        <h3 class="card-title" style="font-size: 1.25rem;">📲 External Push Trigger API (Trigger 2FA from Other Apps)</h3>
+        <p class="card-subtitle">
+          Any client backend can call <code>POST /api/v1/push/challenge</code> to trigger an immediate Push Notification on the user's phone/PWA with a matching number.
+        </p>
+
+        <div style="background-color: var(--bg-input); padding: 16px; border-radius: var(--radius); margin-bottom: 16px; font-family: monospace; font-size: 0.85rem; color: #34d399; overflow-x: auto;">
+          curl -X POST https://15.135.173.157.nip.io/api/v1/push/challenge \<br/>
+          &nbsp;&nbsp;-H "Content-Type: application/json" \<br/>
+          &nbsp;&nbsp;-d '{"email": "customer@clientapp.com", "issuer": "BankApp"}'
+        </div>
+
+        <form id="push-trigger-form" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+          <input type="email" id="push-trigger-email" class="form-input" placeholder="enrolled-user@example.com" style="flex: 1; min-width: 200px;" required />
+          <input type="text" id="push-trigger-issuer" class="form-input" placeholder="Issuer Name (e.g. BankApp)" style="flex: 1; min-width: 160px;" />
+          <button type="submit" class="btn btn-primary" style="background-color: #059669;">Trigger Push Challenge</button>
+        </form>
+
+        <div id="push-trigger-result-box" style="display: none; padding: 16px; background-color: var(--bg-input); border-radius: var(--radius); border: 1px solid var(--border);">
+          <div style="display: flex; gap: 20px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+            <div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Match Number on Screen:</div>
+              <div id="push-trigger-challenge-number" style="font-size: 2.5rem; font-weight: 800; color: #34d399; font-family: monospace;">--</div>
+            </div>
+            <div style="flex: 1; min-width: 200px; font-size: 0.9rem;">
+              <div><strong>Status:</strong> <span id="push-trigger-status" style="font-weight: 600; color: #f59e0b;">Waiting for PWA approval...</span></div>
+              <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Request ID: <span id="push-trigger-req-id" style="font-family: monospace;"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Quick Tester Guide Card -->
       <div class="card" style="border-left: 4px solid var(--primary);">
         <h3 style="font-size: 1.1rem; margin-bottom: 8px;">How to test the dual flow:</h3>
