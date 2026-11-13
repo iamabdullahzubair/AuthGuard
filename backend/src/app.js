@@ -2,8 +2,6 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 import { globalLimiter } from './middleware/rateLimiter.js';
 import authRoutes from './routes/authRoutes.js';
@@ -17,71 +15,73 @@ import tenantRoutes from './routes/tenantRoutes.js';
 import superAdminRoutes from './routes/superAdminRoutes.js';
 import { broadcastLog } from './services/logBroadcaster.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
 
-// Trust reverse proxy headers (localtunnel, ngrok, cloudflare)
+// Trust reverse proxy headers (Nginx, AWS ALB, Cloudflare)
 app.set('trust proxy', true);
 
-// Security Headers with Helmet
+// Standard API Security Headers
 app.use(
   helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdnjs.cloudflare.com', 'https://cdn.jsdelivr.net'],
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-        fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-        imgSrc: ["'self'", 'data:', 'blob:'],
-        connectSrc: ["'self'", 'http:', 'https:', 'ws:', 'wss:'],
-        workerSrc: ["'self'", 'blob:'],
-        mediaSrc: ["'self'", 'blob:'],
-        objectSrc: ["'none'"],
-      },
-    },
-    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
 
-// CORS configuration
+// CORS configuration (Allows frontend, local dev, and customer portals)
 app.use(
   cors({
-    origin: true, // Allow requesting origin (localhost, tunnel, etc.)
+    origin: true,
     credentials: true,
   })
 );
 
-// Middleware
+// Body and Cookie Parsers
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(globalLimiter);
 
-// Live Request Logger for Super Admin Dashboard
+// High-Fidelity Request Logger (Dispatches to Console, Disk File, and Super Admin Live Stream)
 app.use((req, res, next) => {
+  // Ignore noisy health checks and the SSE log stream itself from logging loops
   if (req.path === '/api/health' || req.path === '/api/super-admin/logs/stream') {
     return next();
   }
 
   const start = Date.now();
+  const clientIp =
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+    req.socket.remoteAddress ||
+    '127.0.0.1';
+
   res.on('finish', () => {
     const duration = Date.now() - start;
     const statusCode = res.statusCode;
     const isError = statusCode >= 400;
-    const isAuth = req.path.includes('/auth') || req.path.includes('/login') || req.path.includes('/enroll');
+    const isAuth =
+      req.path.includes('/auth') ||
+      req.path.includes('/login') ||
+      req.path.includes('/enroll') ||
+      req.path.includes('/tenant');
+
+    const level = statusCode >= 500 ? 'ERROR' : isError ? 'WARN' : isAuth ? 'AUTH' : 'INFO';
+    const category = isAuth ? 'auth' : 'api';
+    const queryStr = Object.keys(req.query).length > 0 ? `?${new URLSearchParams(req.query).toString()}` : '';
+    const fullPath = `${req.path}${queryStr}`;
 
     broadcastLog({
-      level: isError ? (statusCode >= 500 ? 'ERROR' : 'WARN') : (isAuth ? 'AUTH' : 'INFO'),
-      category: isAuth ? 'auth' : 'api',
-      message: `${req.method} ${req.path} -> ${statusCode} (${duration}ms)`,
+      level,
+      category,
+      message: `${req.method.padEnd(6)} ${fullPath} -> ${statusCode} (${duration}ms) [ip: ${clientIp}]`,
       metadata: {
         method: req.method,
         path: req.path,
+        query: req.query,
         statusCode,
         durationMs: duration,
-        ip: req.ip || req.headers['x-forwarded-for'],
+        ip: clientIp,
+        userAgent: req.headers['user-agent']?.slice(0, 150) || null,
       },
     });
   });
@@ -89,7 +89,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// API Routes
+// REST API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/enroll', enrollRoutes);
 app.use('/api/login', loginRoutes);
@@ -105,7 +105,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Centralized 404 handler for API routes
+// Centralized 404 handler for unknown API routes
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
@@ -113,6 +113,14 @@ app.use('/api', (req, res) => {
 // Centralized error handler
 app.use((err, req, res, next) => {
   console.error('[Unhandled Server Error]:', err);
+
+  broadcastLog({
+    level: 'ERROR',
+    category: 'system',
+    message: `Unhandled Error: ${err.message || 'Internal Server Error'} on ${req.method} ${req.path}`,
+    metadata: { error: err.message, stack: err.stack, path: req.path },
+  });
+
   const status = err.status || 500;
   res.status(status).json({
     error: err.message || 'Internal Server Error',
@@ -120,4 +128,3 @@ app.use((err, req, res, next) => {
 });
 
 export default app;
-

@@ -9,10 +9,10 @@ async function startServer() {
 
     const server = app.listen(config.PORT, '0.0.0.0', () => {
       console.log(`=================================================`);
-      console.log(`🚀 Authenticator Backend running on port ${config.PORT}`);
-      console.log(`   - Website: http://localhost:${config.PORT}`);
-      console.log(`   - PWA App: http://localhost:${config.PORT}/pwa/`);
-      console.log(`   - API:     http://localhost:${config.PORT}/api/health`);
+      console.log(`🚀 AuthGuard Headless API Engine running on port ${config.PORT}`);
+      console.log(`   - Environment: ${config.NODE_ENV}`);
+      console.log(`   - Healthcheck: http://localhost:${config.PORT}/api/health`);
+      console.log(`   - Super Admin: http://localhost:${config.PORT}/api/super-admin/stats`);
       console.log(`=================================================`);
     });
 
