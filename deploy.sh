@@ -26,6 +26,13 @@ echo "⚡ Building & launching application containers..."
 docker compose up -d --build app
 docker compose up -d nginx certbot
 
+# Step 5: Ensure trusted Let's Encrypt certificates are active
+if docker ps | grep -q auth_certbot; then
+    docker exec auth_certbot cat /etc/letsencrypt/live/15.135.173.157.nip.io/fullchain.pem > ./nginx/ssl/cert.pem 2>/dev/null && \
+    docker exec auth_certbot cat /etc/letsencrypt/live/15.135.173.157.nip.io/privkey.pem > ./nginx/ssl/key.pem 2>/dev/null && \
+    docker compose restart nginx >/dev/null 2>&1 || true
+fi
+
 echo ""
 echo "========================================================"
 echo "📊 Current Container Status:"
