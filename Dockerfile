@@ -18,6 +18,9 @@ FROM node:20-alpine AS runner
 
 WORKDIR /usr/src/app
 
+# Install runtime dependencies for native addons like argon2
+RUN apk add --no-cache libstdc++
+
 # Set production environment
 ENV NODE_ENV=production
 ENV PORT=3001
