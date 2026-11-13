@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AuthGuard Demo Portal</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <link rel="icon" type="image/svg+xml" href="/pwa/public/icons/icon.svg" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="site-header">
+    <div class="header-content">
+      <div class="logo-area">
+        <div class="logo-badge">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+        </div>
+        <span class="logo-title">AuthGuard Portal</span>
+      </div>
+
+      <div class="user-nav">
+        <a href="/pwa/" target="_blank" class="btn btn-secondary" style="font-size: 0.85rem; padding: 6px 14px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+          Open Authenticator PWA
+        </a>
+        <span id="user-email-display" class="user-email-tag"></span>
+        <button id="btn-logout" class="btn btn-secondary" style="font-size: 0.85rem; padding: 6px 14px; display: none;">
+          Sign Out
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+    <!-- Auth Section (Sign in / Register) -->
+    <section id="view-auth">
+      <div class="card" style="max-width: 440px; margin: 40px auto;">
+        <h2 id="auth-title" class="card-title">Sign In to Demo Website</h2>
+        <p class="card-subtitle">Experience secure dual TOTP + Web Push login approval.</p>
+
+        <div id="auth-error" class="alert alert-danger" style="display: none;"></div>
+
+        <form id="auth-form">
+          <div class="form-group">
+            <label class="form-label" for="auth-email">Email Address</label>
+            <input type="email" id="auth-email" class="form-input" placeholder="user@example.com" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="auth-password">Password</label>
+            <input type="password" id="auth-password" class="form-input" placeholder="••••••••" required />
+          </div>
+          <button type="submit" id="btn-auth-submit" class="btn btn-primary btn-block">Sign In</button>
+        </form>
+
+        <div style="text-align: center; margin-top: 20px;">
+          <button id="btn-toggle-auth-mode" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.9rem;">
+            Don't have an account? Register
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dashboard Section -->
+    <section id="view-dashboard" style="display: none;">
+      <div class="card">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+          <div>
+            <h2 class="card-title">Welcome, <span id="dash-email"></span></h2>
+            <p class="card-subtitle" style="margin-bottom: 0;">Account Security & Two-Factor Authentication</p>
+          </div>
+          <span id="2fa-status-badge" class="badge badge-off">DISABLED</span>
+        </div>
+
+        <div style="background-color: var(--bg-input); padding: 20px; border-radius: var(--radius); margin-bottom: 24px; border: 1px solid var(--border);">
+          <h3 style="font-size: 1.1rem; margin-bottom: 8px;">Unified 2FA Protection</h3>
+          <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.5; margin-bottom: 16px;">
+            Scanning ONE QR code enrolls your Authenticator PWA for both standard <strong>RFC 6238 TOTP</strong> codes and instant <strong>Web Push login approvals with number matching</strong>.
+          </p>
+          <button id="btn-open-enroll" class="btn btn-primary">Enable 2FA</button>
+        </div>
+
+        <div>
+          <h3 style="font-size: 1.15rem; margin-bottom: 12px;">Registered 2FA Devices</h3>
+          <div id="device-list-container">
+            <p style="color: var(--text-muted);">Loading devices...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Tester Guide Card -->
+      <div class="card" style="border-left: 4px solid var(--primary);">
+        <h3 style="font-size: 1.1rem; margin-bottom: 8px;">How to test the dual flow:</h3>
+        <ol style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.6; padding-left: 20px;">
+          <li>Click <strong>Enable 2FA</strong> above to display the setup QR code.</li>
+          <li>Open the <a href="/pwa/" target="_blank" style="color: #60a5fa; font-weight: 600;">Authenticator PWA</a> (in another tab, window, or phone).</li>
+          <li>In the PWA, go to <strong>Scan</strong>, allow camera access (or upload a screenshot of the QR).</li>
+          <li>The PWA automatically registers push, creates non-extractable keys, and displays a live 6-digit TOTP code.</li>
+          <li>Type the 6-digit TOTP code into the website modal to complete activation and save your 10 recovery codes.</li>
+          <li>Log out and log back in: the website will display a 2-digit number challenge and send a push notification to your PWA!</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <!-- 1. Modal: 2FA Enrollment (Single QR Code) -->
+  <div id="modal-enroll" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 style="font-size: 1.25rem; font-weight: 700;">Scan QR Code with Authenticator</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+
+      <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.4;">
+        Scan this single QR code from the <strong>AuthGuard Authenticator PWA</strong> to register both Push approvals and TOTP codes.
+      </p>
+
+      <div class="qr-container">
+        <img id="qr-code-image" class="qr-img" alt="2FA Setup QR Code" />
+      </div>
+
+      <div style="font-size: 0.8rem; color: var(--text-muted); text-align: center; margin-bottom: 16px;">
+        Secret: <span id="enroll-secret-text" style="font-family: monospace; color: var(--text-main);"></span>
+      </div>
+
+      <div id="enroll-error" class="alert alert-danger" style="display: none;"></div>
+
+      <div class="form-group">
+        <label class="form-label" for="enroll-totp-input">Enter 6-digit code shown on Authenticator PWA:</label>
+        <input type="text" id="enroll-totp-input" class="form-input" placeholder="123456" maxlength="6" style="font-size: 1.5rem; text-align: center; letter-spacing: 6px; font-family: monospace;" />
+      </div>
+
+      <button id="btn-verify-enroll" class="btn btn-primary btn-block">Verify & Activate 2FA</button>
+    </div>
+  </div>
+
+  <!-- 2. Modal: 2FA Login Challenge (Push Number Matching + Fallback) -->
+  <div id="modal-2fa" class="modal-overlay">
+    <div class="modal-box" style="text-align: center;">
+      <div class="modal-header">
+        <h3 style="font-size: 1.25rem; font-weight: 700;">Two-Factor Authentication</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+
+      <div id="challenge-error" class="alert alert-danger" style="display: none;"></div>
+
+      <!-- Section: Push Number Match -->
+      <div id="section-push-challenge">
+        <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 16px;">
+          Select this number on your Authenticator PWA to approve login:
+        </p>
+
+        <div class="challenge-box">
+          <div id="challenge-number-display" class="challenge-number">--</div>
+          <div style="margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <div class="spinner"></div>
+            <span id="challenge-expiry-text" style="font-size: 0.85rem; color: var(--text-muted);">Expires in 60s</span>
+          </div>
+        </div>
+
+        <p id="challenge-status-text" style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 24px;">
+          Awaiting push approval...
+        </p>
+
+        <div style="border-top: 1px solid var(--border); padding-top: 16px; display: flex; justify-content: space-around;">
+          <button id="btn-use-totp-fallback" class="btn btn-secondary" style="font-size: 0.85rem;">
+            Use TOTP Code
+          </button>
+          <button id="btn-use-recovery-fallback" class="btn btn-secondary" style="font-size: 0.85rem;">
+            Use Recovery Code
+          </button>
+        </div>
+      </div>
+
+      <!-- Section: TOTP Fallback -->
+      <div id="section-totp-fallback" style="display: none; text-align: left;">
+        <h4 style="margin-bottom: 8px;">Enter 6-Digit TOTP Code</h4>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
+          Open your Authenticator PWA and enter the current rotating 6-digit code.
+        </p>
+        <div class="form-group">
+          <input type="text" id="fallback-totp-input" class="form-input" placeholder="123456" maxlength="6" style="font-size: 1.5rem; text-align: center; letter-spacing: 6px; font-family: monospace;" />
+        </div>
+        <button id="btn-submit-totp-fallback" class="btn btn-primary btn-block" style="margin-bottom: 12px;">Verify Code</button>
+        <button id="btn-back-to-push" class="btn btn-secondary btn-block">Back to Push Challenge</button>
+      </div>
+
+      <!-- Section: Recovery Code Fallback -->
+      <div id="section-recovery-fallback" style="display: none; text-align: left;">
+        <h4 style="margin-bottom: 8px;">Enter Recovery Code</h4>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
+          Enter one of your 10 backup recovery codes (e.g. ABCD-1234).
+        </p>
+        <div class="form-group">
+          <input type="text" id="fallback-recovery-input" class="form-input" placeholder="ABCD-1234" style="font-size: 1.25rem; text-align: center; font-family: monospace;" />
+        </div>
+        <button id="btn-submit-recovery-fallback" class="btn btn-primary btn-block" style="margin-bottom: 12px;">Verify Recovery Code</button>
+        <button id="btn-back-to-push-2" class="btn btn-secondary btn-block" onclick="document.getElementById('btn-back-to-push').click()">Back to Push Challenge</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Modal: Recovery Codes Backup -->
+  <div id="modal-recovery" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 style="font-size: 1.25rem; font-weight: 700; color: #34d399;">2FA Successfully Activated!</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5;">
+        Save these 10 one-time backup recovery codes in a secure place. If you ever lose access to your Authenticator PWA, each code can be used once to log in.
+      </p>
+
+      <div id="recovery-grid" class="recovery-grid"></div>
+
+      <button class="btn btn-primary btn-block modal-close" style="margin-top: 16px;">I Have Saved My Recovery Codes</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>
+
