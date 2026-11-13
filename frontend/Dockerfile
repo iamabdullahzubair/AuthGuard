@@ -5,11 +5,12 @@ WORKDIR /app
 
 # Copy dependency files
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --prefer-offline --no-audit
 
 # Copy source and build Next.js standalone bundle
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=512"
 RUN npm run build
 
 # Production Runner stage
