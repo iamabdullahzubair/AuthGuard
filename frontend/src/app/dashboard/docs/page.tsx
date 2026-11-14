@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Copy, Check, Terminal, Shield, CheckCircle2 } from 'lucide-react';
+import { Copy, Check, Terminal, Shield, CheckCircle2, Building, Key } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 
 export default function DocsPage() {
   const [activeTab, setActiveTab] = useState<'curl' | 'node' | 'python'>('curl');
   const [liveApiKey, setLiveApiKey] = useState('ag_live_YOUR_API_KEY');
+  const [tenantSlug, setTenantSlug] = useState('your-tenant-id');
   const [copied, setCopied] = useState<string | null>(null);
   const [originUrl, setOriginUrl] = useState('https://auth.yourcompany.com');
 
@@ -14,6 +15,15 @@ export default function DocsPage() {
     if (typeof window !== 'undefined') {
       setOriginUrl(window.location.origin);
     }
+
+    // Load current tenant profile (slug / id)
+    apiClient('/api/tenant/me')
+      .then((data) => {
+        if (data.tenant?.slug || data.tenant?.id) {
+          setTenantSlug(data.tenant.slug || data.tenant.id);
+        }
+      })
+      .catch(() => {});
 
     // Attempt to load tenant's first live API key
     apiClient('/api/tenant/api-keys')
@@ -35,11 +45,11 @@ export default function DocsPage() {
   const codeSnippets = {
     curl: {
       preauth: `# 1. Check if user is enrolled & what 2FA factors are ready
-curl -X GET "${originUrl}/api/v1/users/status?email=customer@yourcompany.com" \\
+curl -X GET "${originUrl}/api/v1/tenants/${tenantSlug}/users/status?email=customer@yourcompany.com" \\
   -H "X-Api-Key: ${liveApiKey}"`,
 
       push: `# 2. Option A: Trigger Phishing-Resistant 2FA Push Challenge
-curl -X POST ${originUrl}/api/v1/push/challenge \\
+curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -47,7 +57,7 @@ curl -X POST ${originUrl}/api/v1/push/challenge \\
   }'`,
 
       totp: `# 3. Option B: Verify 6-Digit TOTP Passcode
-curl -X POST ${originUrl}/api/v1/totp/verify \\
+curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -56,7 +66,7 @@ curl -X POST ${originUrl}/api/v1/totp/verify \\
   }'`,
 
       enroll: `# 4. If User Not Enrolled: Generate Setup QR Code
-curl -X POST ${originUrl}/api/v1/enroll \\
+curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/enroll \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -67,14 +77,14 @@ curl -X POST ${originUrl}/api/v1/enroll \\
 
     node: {
       preauth: `// 1. Check User Enrollment Status
-const statusRes = await fetch('${originUrl}/api/v1/users/status?email=' + encodeURIComponent('customer@yourcompany.com'), {
+const statusRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/users/status?email=' + encodeURIComponent('customer@yourcompany.com'), {
   headers: { 'X-Api-Key': '${liveApiKey}' },
 });
 const { enrolled, factors, activeDevices } = await statusRes.json();
 // factors: ['push', 'totp']`,
 
       push: `// 2. Option A: Trigger 2FA Push Challenge
-const challenge = await fetch('${originUrl}/api/v1/push/challenge', {
+const challenge = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -83,10 +93,11 @@ const challenge = await fetch('${originUrl}/api/v1/push/challenge', {
   body: JSON.stringify({ email: 'customer@yourcompany.com' }),
 }).then(res => res.json());
 
-console.log('Match number to display to customer:', challenge.challengeNumber);`,
+console.log('Match number to display to customer:', challenge.challengeNumber);
+console.log('Status polling endpoint:', challenge.statusUrl);`,
 
       totp: `// 3. Option B: Verify 6-Digit TOTP Code
-const totpRes = await fetch('${originUrl}/api/v1/totp/verify', {
+const totpRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -100,7 +111,7 @@ if (totpRes.valid) {
 }`,
 
       enroll: `// 4. Enroll User & Generate Setup QR Code
-const enrollRes = await fetch('${originUrl}/api/v1/enroll', {
+const enrollRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/enroll', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -121,7 +132,7 @@ const enrollRes = await fetch('${originUrl}/api/v1/enroll', {
 # 1. Check User Enrollment Status
 headers = {"X-Api-Key": "${liveApiKey}"}
 res = requests.get(
-    "${originUrl}/api/v1/users/status",
+    "${originUrl}/api/v1/tenants/${tenantSlug}/users/status",
     params={"email": "customer@yourcompany.com"},
     headers=headers
 )
@@ -132,7 +143,7 @@ print("Enrolled:", data.get("enrolled"), "Factors:", data.get("factors"))`,
 
 # 2. Option A: Trigger 2FA Push Challenge
 res = requests.post(
-    "${originUrl}/api/v1/push/challenge",
+    "${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={"email": "customer@yourcompany.com"}
 )
@@ -143,7 +154,7 @@ print("Display match number to user:", challenge["challengeNumber"])`,
 
 # 3. Option B: Verify 6-Digit TOTP Code
 res = requests.post(
-    "${originUrl}/api/v1/totp/verify",
+    "${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={"email": "customer@yourcompany.com", "code": "481920"}
 )
@@ -155,7 +166,7 @@ if result.get("valid"):
 
 # 4. Enroll User & Generate Setup QR Code
 res = requests.post(
-    "${originUrl}/api/v1/enroll",
+    "${originUrl}/api/v1/tenants/${tenantSlug}/enroll",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={
         "email": "customer@yourcompany.com",
@@ -172,8 +183,33 @@ print("QR Code Data URL:", data["qrCodeDataUrl"])`,
       <div>
         <h1 className="text-2xl font-bold text-white tracking-tight">Developer SDK & API Documentation</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Complete client authentication lifecycle: Pre-Auth Check $\rightarrow$ Push/TOTP Verification $\rightarrow$ Onboarding Enrollment
+          Complete client authentication lifecycle: Pre-Auth Check &rarr; Push / TOTP Verification &rarr; Onboarding Enrollment
         </p>
+      </div>
+
+      {/* Tenant-Scoped URL Badge */}
+      <div className="p-4 bg-blue-950/40 border border-blue-800/60 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="h-9 w-9 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Building className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-white">Your Tenant Endpoint:</span>
+              <code className="px-2 py-0.5 bg-blue-900/50 text-blue-300 font-mono text-xs rounded border border-blue-700/50">
+                /api/v1/tenants/{tenantSlug}/...
+              </code>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Strict Multi-Tenant Isolation enabled. Requests verify that your API Key matches <code className="text-slate-300 font-mono">{tenantSlug}</code> in the URL, preventing any cross-tenant data access.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 border border-slate-800 rounded-xl shrink-0">
+          <Key className="h-4 w-4 text-amber-400" />
+          <span className="text-xs text-slate-300 font-mono">{liveApiKey}</span>
+        </div>
       </div>
 
       {/* Language Selector */}

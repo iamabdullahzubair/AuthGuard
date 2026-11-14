@@ -96,6 +96,7 @@ app.use('/api/login', loginRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/vapid-public-key', vapidRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/v1/tenants/:tenantId', apiV1Routes);
 app.use('/api/v1', apiV1Routes);
 app.use('/api/tenant', tenantRoutes);
 app.use('/api/super-admin', superAdminRoutes);

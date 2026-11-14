@@ -8,27 +8,77 @@ import { generateTotpSecret, generateQrCodeDataUrl, verifyTotpTokenWithAntiRepla
 import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { verifyApiKey } from '../services/apiKeyService.js';
+import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
+import { verifyMemberToken } from '../middleware/tenantSessionAuth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 
-const router = Router();
+const router = Router({ mergeParams: true });
 
-// Middleware: Optional API Key Context Resolution
+/**
+ * Middleware: Authentication, Tenant Resolution & URL Path Cross-Verification
+ * Supports both:
+ * 1. Explicit tenant URLs: /api/v1/tenants/:tenantId/...
+ * 2. Header-driven URLs:   /api/v1/...
+ */
 router.use(async (req, res, next) => {
   let rawKey = req.headers['x-api-key'];
+  let isBearer = false;
+
   if (!rawKey && req.headers.authorization) {
     const parts = req.headers.authorization.split(' ');
     if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
       rawKey = parts[1];
+      isBearer = true;
     }
   }
 
+  // 1. Resolve API Key if present
   if (rawKey && (rawKey.startsWith('ag_live_') || rawKey.startsWith('ag_test_'))) {
     const auth = await verifyApiKey(rawKey).catch(() => null);
-    if (auth && !auth.error) {
-      req.tenant = auth.tenant;
-      req.apiKey = { id: auth.keyId, name: auth.keyName, environment: auth.environment };
+    if (!auth || auth.error) {
+      return res.status(401).json({ error: 'Invalid or revoked API key' });
+    }
+    req.tenant = auth.tenant;
+    req.apiKey = { id: auth.keyId, name: auth.keyName, environment: auth.environment };
+  }
+  // 2. Resolve Member Session JWT if present
+  else if (rawKey && isBearer) {
+    const member = verifyMemberToken(rawKey);
+    if (member) {
+      req.user = member;
+      if (member.tenantId) {
+        const tenantRes = await query(`SELECT * FROM tenants WHERE id = $1`, [member.tenantId]);
+        if (tenantRes.rows.length > 0) {
+          req.tenant = tenantRes.rows[0];
+        }
+      }
     }
   }
+
+  // 3. Cross-verify Tenant Context if tenantId parameter is present in URL
+  const pathTenantId = req.params.tenantId;
+  if (pathTenantId) {
+    if (req.tenant) {
+      const isMatch = req.tenant.id === pathTenantId || req.tenant.slug === pathTenantId;
+      const isSuper = Boolean(req.user?.is_super_admin);
+      if (!isMatch && !isSuper) {
+        return res.status(403).json({
+          error: `Forbidden: Tenant '${pathTenantId}' in URL does not match authenticated credentials`,
+        });
+      }
+    } else {
+      // If pathTenantId provided but no auth header, look up tenant by ID or slug
+      const tenantRes = await query(
+        `SELECT * FROM tenants WHERE id = $1 OR slug = $1`,
+        [pathTenantId]
+      );
+      if (tenantRes.rows.length === 0) {
+        return res.status(404).json({ error: `Tenant '${pathTenantId}' not found` });
+      }
+      req.tenant = tenantRes.rows[0];
+    }
+  }
+
   next();
 });
 
@@ -46,8 +96,8 @@ const pushChallengeSchema = z.object({
 });
 
 /**
- * POST /api/v1/enroll
- * External API for client applications to enroll a user and receive a setup QR code
+ * POST /api/v1/enroll or /api/v1/tenants/:tenantId/enroll
+ * Client application enrolls a user and receives setup QR code payload
  */
 router.post('/enroll', async (req, res) => {
   const parseResult = enrollUserSchema.safeParse(req.body);
@@ -57,42 +107,45 @@ router.post('/enroll', async (req, res) => {
 
   const { email, issuer, webhookUrl } = parseResult.data;
   const normalizedEmail = email.toLowerCase().trim();
-  const resolvedIssuer = issuer || req.tenant?.branding?.issuerName || req.tenant?.name || 'AuthGuard';
+  const resolvedTenantId = req.tenant?.id || 'tenant_system_default';
+  const resolvedIssuer = req.tenant?.branding?.issuerName || req.tenant?.name || issuer || 'AuthGuard';
 
   try {
-    // 1. Find or create user
-    let userId;
-    const userRes = await query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+    // 1. Find or create in end_users (tenant-scoped)
+    let endUserId;
+    if (req.tenant) {
+      const existingEndUser = await query(
+        `SELECT id FROM end_users WHERE tenant_id = $1 AND email = $2`,
+        [resolvedTenantId, normalizedEmail]
+      );
 
+      if (existingEndUser.rows.length > 0) {
+        endUserId = existingEndUser.rows[0].id;
+      } else {
+        endUserId = crypto.randomUUID();
+        await query(
+          `INSERT INTO end_users (id, tenant_id, email, two_factor_enabled)
+           VALUES ($1, $2, $3, false)`,
+          [endUserId, resolvedTenantId, normalizedEmail]
+        );
+      }
+    }
+
+    // 2. Also ensure existence in legacy users table for global device/token routing
+    let mainUserId;
+    const userRes = await query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
     if (userRes.rows.length > 0) {
-      userId = userRes.rows[0].id;
+      mainUserId = userRes.rows[0].id;
     } else {
-      userId = crypto.randomUUID();
+      mainUserId = crypto.randomUUID();
       const randomInitialPassword = crypto.randomBytes(24).toString('base64');
       const passwordHash = await hashPassword(randomInitialPassword);
 
       await query(
         `INSERT INTO users (id, email, password_hash, two_factor_enabled)
          VALUES ($1, $2, $3, false)`,
-        [userId, normalizedEmail, passwordHash]
+        [mainUserId, normalizedEmail, passwordHash]
       );
-    }
-
-    // 2. Link to tenant organization if API key is provided
-    if (req.tenant) {
-      await query(
-        `INSERT INTO end_users (id, tenant_id, email, two_factor_enabled)
-         VALUES ($1, $2, $3, false)
-         ON CONFLICT (tenant_id, email) DO NOTHING`,
-        [crypto.randomUUID(), req.tenant.id, normalizedEmail]
-      );
-
-      // Trigger organization webhook configured in dashboard
-      dispatchTenantWebhook(req.tenant.id, 'user.enrolled', {
-        email: normalizedEmail,
-        userId,
-        timestamp: Date.now(),
-      }).catch(() => {});
     }
 
     // 3. Register legacy user-specific webhook ONLY if explicitly passed
@@ -104,7 +157,7 @@ router.post('/enroll', async (req, res) => {
       await query(
         `INSERT INTO webhooks (id, user_id, url, secret, is_active, updated_at)
          VALUES ($1, $2, $3, $4, true, NOW())`,
-        [webhookId, userId, webhookUrl, webhookSecret]
+        [webhookId, mainUserId, webhookUrl, webhookSecret]
       );
       registeredWebhookId = webhookId;
     }
@@ -114,22 +167,43 @@ router.post('/enroll', async (req, res) => {
     const encryptedSecret = encryptAesGcm(secret);
 
     const enrollToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
     // Invalidate previous tokens
-    await query(`UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`, [userId]);
+    await query(`UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`, [mainUserId]);
 
     await query(
       `INSERT INTO enroll_tokens (id, user_id, token, totp_secret_temp, expires_at, used)
        VALUES ($1, $2, $3, $4, $5, false)`,
       [
         crypto.randomUUID(),
-        userId,
+        mainUserId,
         enrollToken,
         JSON.stringify(encryptedSecret),
         expiresAt,
       ]
     );
+
+    // Save temporary secret to end_user_totp if in tenant context
+    if (req.tenant && endUserId) {
+      await query(
+        `INSERT INTO end_user_totp (id, tenant_id, end_user_id, encrypted_secret, iv, tag)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (end_user_id)
+         DO UPDATE SET
+           encrypted_secret = EXCLUDED.encrypted_secret,
+           iv = EXCLUDED.iv,
+           tag = EXCLUDED.tag`,
+        [crypto.randomUUID(), resolvedTenantId, endUserId, encryptedSecret.ciphertext, encryptedSecret.iv, encryptedSecret.tag]
+      );
+
+      // Trigger organization webhook configured in dashboard
+      dispatchTenantWebhook(req.tenant.id, 'user.enrolled', {
+        email: normalizedEmail,
+        userId: endUserId,
+        timestamp: Date.now(),
+      }).catch(() => {});
+    }
 
     // 5. Resolve Server URL dynamically from request
     const forwardedProto = req.headers['x-forwarded-proto'];
@@ -145,14 +219,16 @@ router.post('/enroll', async (req, res) => {
       secret,
       account: normalizedEmail,
       issuer: resolvedIssuer,
+      tenant_id: req.tenant?.id || null,
     };
 
     const qrCodeDataUrl = await generateQrCodeDataUrl(qrPayload);
 
     return res.status(200).json({
       success: true,
-      userId,
+      userId: endUserId || mainUserId,
       email: normalizedEmail,
+      tenantId: req.tenant?.id || null,
       issuer: resolvedIssuer,
       enrollToken,
       totpSecret: secret,
@@ -169,7 +245,7 @@ router.post('/enroll', async (req, res) => {
 });
 
 /**
- * POST /api/v1/push/challenge
+ * POST /api/v1/push/challenge or /api/v1/tenants/:tenantId/push/challenge
  * Triggers a 2FA Push notification to user's enrolled devices
  */
 router.post('/push/challenge', authLimiter, async (req, res) => {
@@ -180,22 +256,53 @@ router.post('/push/challenge', authLimiter, async (req, res) => {
 
   const { email, issuer, title, message } = parseResult.data;
   const normalizedEmail = email.toLowerCase().trim();
+  const resolvedIssuer = req.tenant?.branding?.issuerName || req.tenant?.name || issuer || 'AuthGuard';
 
   try {
-    // 1. Find user
-    const userRes = await query('SELECT id, email FROM users WHERE email = $1', [normalizedEmail]);
-    if (userRes.rows.length === 0) {
+    // 1. Find user (priority: tenant end_users, fallback: users)
+    let user = null;
+    let endUserId = null;
+
+    if (req.tenant) {
+      const tenantUserRes = await query(
+        `SELECT id, email, two_factor_enabled FROM end_users WHERE tenant_id = $1 AND email = $2`,
+        [req.tenant.id, normalizedEmail]
+      );
+      if (tenantUserRes.rows.length > 0) {
+        user = tenantUserRes.rows[0];
+        endUserId = user.id;
+      }
+    }
+
+    let legacyUser = null;
+    const legacyUserRes = await query('SELECT id, email, two_factor_enabled FROM users WHERE email = $1', [normalizedEmail]);
+    if (legacyUserRes.rows.length > 0) {
+      legacyUser = legacyUserRes.rows[0];
+      if (!user) user = legacyUser;
+    }
+
+    if (!user) {
       return res.status(404).json({ error: 'User not found. Please enroll this user first.' });
     }
-    const user = userRes.rows[0];
 
-    // 2. Check active devices
-    const deviceRes = await query(
-      `SELECT id FROM devices WHERE user_id = $1 AND status = 'active'`,
-      [user.id]
-    );
+    // 2. Check active devices across end_user_devices & devices
+    let activeDevicesCount = 0;
+    if (req.tenant && endUserId) {
+      const devRes = await query(
+        `SELECT COUNT(*) as count FROM end_user_devices WHERE tenant_id = $1 AND end_user_id = $2 AND status = 'active'`,
+        [req.tenant.id, endUserId]
+      );
+      activeDevicesCount += parseInt(devRes.rows[0]?.count || 0, 10);
+    }
+    if (legacyUser) {
+      const legacyDevRes = await query(
+        `SELECT COUNT(*) as count FROM devices WHERE user_id = $1 AND status = 'active'`,
+        [legacyUser.id]
+      );
+      activeDevicesCount += parseInt(legacyDevRes.rows[0]?.count || 0, 10);
+    }
 
-    if (deviceRes.rows.length === 0) {
+    if (activeDevicesCount === 0) {
       return res.status(400).json({
         error: 'No active 2FA devices found for this user. The user must enroll via QR code first.',
       });
@@ -212,23 +319,32 @@ router.post('/push/challenge', authLimiter, async (req, res) => {
     const requestId = crypto.randomUUID();
     const nonce = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 1000); // 60s lifetime
+    const targetUserId = legacyUser?.id || user.id;
 
     // Invalidate any older pending requests for this user
     await query(
       `UPDATE login_requests SET status = 'expired' WHERE user_id = $1 AND status = 'pending'`,
-      [user.id]
+      [targetUserId]
     );
 
-    // 4. Store login request
+    // 4. Store login request in both login_requests & auth_challenges
     await query(
       `INSERT INTO login_requests (id, user_id, challenge_number, decoys, status, nonce, expires_at)
        VALUES ($1, $2, $3, $4, 'pending', $5, $6)`,
-      [requestId, user.id, challengeNumber, JSON.stringify(shuffledOptions), nonce, expiresAt]
+      [requestId, targetUserId, challengeNumber, JSON.stringify(shuffledOptions), nonce, expiresAt]
     );
+
+    if (req.tenant && endUserId) {
+      await query(
+        `INSERT INTO auth_challenges (id, tenant_id, end_user_id, challenge_number, decoys, status, nonce, expires_at)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6)`,
+        [requestId, req.tenant.id, endUserId, challengeNumber, JSON.stringify(shuffledOptions), nonce, expiresAt]
+      ).catch(() => {});
+    }
 
     // 5. Send Web Push
     const pushPayload = {
-      title: title || `${issuer} - Login Approval`,
+      title: title || `${resolvedIssuer} - Login Approval`,
       body: message || `Login attempted. Confirm number ${challengeNumber} on your device to approve.`,
       icon: '/pwa/icons/icon-192.png',
       data: {
@@ -240,14 +356,18 @@ router.post('/push/challenge', authLimiter, async (req, res) => {
       },
     };
 
-    const pushResult = await sendPushToUser(user.id, pushPayload);
+    const pushResult = await sendPushToUser(targetUserId, pushPayload, req.tenant?.id);
 
     await logAuditEvent({
-      userId: user.id,
+      userId: targetUserId,
       event: 'API_PUSH_CHALLENGE_INITIATED',
       req,
-      metadata: { requestId, devicesSent: pushResult.sent, issuer },
+      metadata: { requestId, devicesSent: pushResult.sent, issuer: resolvedIssuer, tenantId: req.tenant?.id },
     });
+
+    const statusUrl = req.params.tenantId
+      ? `/api/v1/tenants/${req.params.tenantId}/push/status/${requestId}`
+      : `/api/v1/push/status/${requestId}`;
 
     return res.status(200).json({
       success: true,
@@ -255,7 +375,7 @@ router.post('/push/challenge', authLimiter, async (req, res) => {
       challengeNumber,
       devicesNotified: pushResult.sent,
       expiresAt: expiresAt.toISOString(),
-      statusUrl: `/api/v1/push/status/${requestId}`,
+      statusUrl,
       message: `Push notification sent! Present number ${challengeNumber} to the user to approve on their Authenticator PWA.`,
     });
   } catch (err) {
@@ -265,7 +385,7 @@ router.post('/push/challenge', authLimiter, async (req, res) => {
 });
 
 /**
- * GET /api/v1/push/status/:requestId
+ * GET /api/v1/push/status/:requestId or /api/v1/tenants/:tenantId/push/status/:requestId
  * Checks status of an initiated push challenge (pending, approved, denied, expired)
  */
 router.get('/push/status/:requestId', async (req, res) => {
@@ -298,7 +418,7 @@ router.get('/push/status/:requestId', async (req, res) => {
 });
 
 /**
- * GET & POST /api/v1/users/status?email=user@example.com
+ * GET & POST /api/v1/users/status or /api/v1/tenants/:tenantId/users/status?email=user@example.com
  * Client checks whether an end-user is enrolled and what 2FA factors are ready
  */
 const checkUserStatusHandler = async (req, res) => {
@@ -337,6 +457,7 @@ const checkUserStatusHandler = async (req, res) => {
       return res.json({
         enrolled: false,
         email: normalizedEmail,
+        tenantId: req.tenant?.id || null,
         factors: [],
         activeDevices: 0,
         twoFactorEnabled: false,
@@ -352,6 +473,7 @@ const checkUserStatusHandler = async (req, res) => {
     return res.json({
       enrolled: factors.length > 0,
       email: normalizedEmail,
+      tenantId: req.tenant?.id || null,
       factors,
       activeDevices,
       twoFactorEnabled: Boolean(user.two_factor_enabled),
@@ -366,7 +488,7 @@ router.get('/users/status', checkUserStatusHandler);
 router.post('/users/status', checkUserStatusHandler);
 
 /**
- * POST /api/v1/totp/verify
+ * POST /api/v1/totp/verify or /api/v1/tenants/:tenantId/totp/verify
  * Client application verifies a 6-digit TOTP code for a user
  */
 router.post('/totp/verify', authLimiter, async (req, res) => {
@@ -399,15 +521,16 @@ router.post('/totp/verify', authLimiter, async (req, res) => {
 
     if (!secret) {
       const legacyUser = await query(
-        `SELECT id, totp_secret, two_factor_enabled FROM users WHERE email = $1`,
+        `SELECT u.id, t.encrypted_secret, t.iv, t.tag, u.two_factor_enabled 
+         FROM users u
+         LEFT JOIN totp_secrets t ON u.id = t.user_id
+         WHERE u.email = $1`,
         [normalizedEmail]
       );
-      if (legacyUser.rows.length > 0 && legacyUser.rows[0].totp_secret) {
+      if (legacyUser.rows.length > 0 && legacyUser.rows[0].encrypted_secret) {
         userId = legacyUser.rows[0].id;
-        const enc = typeof legacyUser.rows[0].totp_secret === 'string'
-          ? JSON.parse(legacyUser.rows[0].totp_secret)
-          : legacyUser.rows[0].totp_secret;
-        secret = decryptAesGcm(enc);
+        const row = legacyUser.rows[0];
+        secret = decryptAesGcm(row.encrypted_secret, row.iv, row.tag);
       }
     }
 
@@ -437,4 +560,3 @@ router.post('/totp/verify', authLimiter, async (req, res) => {
 });
 
 export default router;
-

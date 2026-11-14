@@ -14,6 +14,7 @@ import { verifyTotpTokenWithAntiReplay } from '../services/totpService.js';
 import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { dispatchWebhook } from '../services/webhookService.js';
+import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
 
 const router = Router();
 
@@ -247,8 +248,9 @@ router.post('/respond', authLimiter, async (req, res) => {
     timestamp,
   });
 
-  // Find candidate devices for signature verification
-  let deviceQuery = `SELECT id, user_id, public_key, status FROM devices WHERE user_id = $1 AND status = 'active'`;
+  // Find candidate devices for signature verification (checking both devices and end_user_devices)
+  let candidateDevices = [];
+  let deviceQuery = `SELECT id, user_id, public_key, status, 'devices' as source_table FROM devices WHERE user_id = $1 AND status = 'active'`;
   const deviceParams = [loginReq.user_id];
 
   if (device_id) {
@@ -257,12 +259,31 @@ router.post('/respond', authLimiter, async (req, res) => {
   }
 
   const devicesResult = await query(deviceQuery, deviceParams);
-  if (devicesResult.rows.length === 0) {
+  candidateDevices.push(...devicesResult.rows);
+
+  // Also query end_user_devices
+  let endUserDevQuery = `
+    SELECT d.id, d.end_user_id as user_id, d.public_key, d.status, 'end_user_devices' as source_table
+    FROM end_user_devices d
+    JOIN end_users eu ON d.end_user_id = eu.id
+    WHERE (d.end_user_id = $1 OR eu.email = (SELECT email FROM users WHERE id = $1))
+      AND d.status = 'active'
+  `;
+  const endUserDevParams = [loginReq.user_id];
+  if (device_id) {
+    endUserDevQuery += ` AND d.id = $2`;
+    endUserDevParams.push(device_id);
+  }
+
+  const endUserDevResult = await query(endUserDevQuery, endUserDevParams).catch(() => ({ rows: [] }));
+  candidateDevices.push(...endUserDevResult.rows);
+
+  if (candidateDevices.length === 0) {
     return res.status(403).json({ error: 'No active device registered for this user' });
   }
 
   let verifiedDevice = null;
-  for (const dev of devicesResult.rows) {
+  for (const dev of candidateDevices) {
     const jwk = typeof dev.public_key === 'string' ? JSON.parse(dev.public_key) : dev.public_key;
     const isValid = verifyEcdsaSignature(jwk, canonicalPayload, signature);
     if (isValid) {
@@ -288,6 +309,19 @@ router.post('/respond', authLimiter, async (req, res) => {
       [request_id]
     );
 
+    // Also update auth_challenges and dispatch tenant webhooks if applicable
+    const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
+    if (challengeCheck.rows.length > 0) {
+      const tenantId = challengeCheck.rows[0].tenant_id;
+      await query(`UPDATE auth_challenges SET status = 'denied' WHERE id = $1`, [request_id]).catch(() => {});
+      dispatchTenantWebhook(tenantId, 'login.denied', {
+        requestId: request_id,
+        status: 'denied',
+        reason: 'user_denied',
+        timestamp: Date.now(),
+      }).catch(() => {});
+    }
+
     await logAuditEvent({
       userId: loginReq.user_id,
       event: 'LOGIN_PUSH_DENIED_BY_USER',
@@ -311,6 +345,18 @@ router.post('/respond', authLimiter, async (req, res) => {
       `UPDATE login_requests SET status = 'denied' WHERE id = $1`,
       [request_id]
     );
+
+    const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
+    if (challengeCheck.rows.length > 0) {
+      const tenantId = challengeCheck.rows[0].tenant_id;
+      await query(`UPDATE auth_challenges SET status = 'denied' WHERE id = $1`, [request_id]).catch(() => {});
+      dispatchTenantWebhook(tenantId, 'login.denied', {
+        requestId: request_id,
+        status: 'denied',
+        reason: 'number_mismatch',
+        timestamp: Date.now(),
+      }).catch(() => {});
+    }
 
     await logAuditEvent({
       userId: loginReq.user_id,
@@ -345,7 +391,11 @@ router.post('/respond', authLimiter, async (req, res) => {
   );
 
   // Update device last_used
-  await query(`UPDATE devices SET last_used = NOW() WHERE id = $1`, [verifiedDevice.id]);
+  if (verifiedDevice.source_table === 'end_user_devices') {
+    await query(`UPDATE end_user_devices SET last_used_at = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
+  } else {
+    await query(`UPDATE devices SET last_used = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
+  }
 
   await logAuditEvent({
     userId: loginReq.user_id,
@@ -354,6 +404,7 @@ router.post('/respond', authLimiter, async (req, res) => {
     metadata: { request_id, deviceId: verifiedDevice.id },
   });
 
+  // Dispatch legacy webhook
   dispatchWebhook(loginReq.user_id, 'login.approved', {
     requestId: request_id,
     userId: loginReq.user_id,
@@ -363,6 +414,21 @@ router.post('/respond', authLimiter, async (req, res) => {
     sessionToken,
     timestamp: Date.now(),
   });
+
+  // Also dispatch tenant webhook if associated with a tenant
+  const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
+  if (challengeCheck.rows.length > 0) {
+    const tenantId = challengeCheck.rows[0].tenant_id;
+    await query(`UPDATE auth_challenges SET status = 'approved' WHERE id = $1`, [request_id]).catch(() => {});
+    dispatchTenantWebhook(tenantId, 'login.approved', {
+      requestId: request_id,
+      userId: loginReq.user_id,
+      email: userEmail,
+      deviceId: verifiedDevice.id,
+      status: 'approved',
+      timestamp: Date.now(),
+    }).catch(() => {});
+  }
 
   return res.json({
     success: true,
