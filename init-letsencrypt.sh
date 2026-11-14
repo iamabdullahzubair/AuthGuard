@@ -40,10 +40,10 @@ docker compose run --rm --entrypoint "\
     --force-renewal \
     --non-interactive" certbot
 
-# 4. Copy generated certificates using docker cp (foolproof across all platforms)
+# 4. Copy generated certificates into Nginx SSL directory
 echo "4. Installing certificates into Nginx SSL directory..."
-docker cp auth_certbot:/etc/letsencrypt/live/$DOMAIN/fullchain.pem ./nginx/ssl/cert.pem
-docker cp auth_certbot:/etc/letsencrypt/live/$DOMAIN/privkey.pem ./nginx/ssl/key.pem
+docker exec auth_certbot cat /etc/letsencrypt/live/$DOMAIN/fullchain.pem > ./nginx/ssl/cert.pem
+docker exec auth_certbot cat /etc/letsencrypt/live/$DOMAIN/privkey.pem > ./nginx/ssl/key.pem
 
 # 5. Restart Nginx to load the new SSL certificate
 echo "5. Restarting Nginx with new trusted SSL certificate..."

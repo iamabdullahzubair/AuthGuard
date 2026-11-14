@@ -25,21 +25,39 @@ docker compose up -d postgres redis
 docker compose up -d --build app
 docker compose up -d nginx certbot
 
-# Step 5: Automatically sync active Let's Encrypt certificates to Nginx
-CERT_DIR=""
+# Step 5: Detect Active Dynamic Public IP & nip.io Domain
+echo "🔍 Detecting active AWS Public IP..."
+PUBLIC_IP=$(curl -s -m 4 http://checkip.amazonaws.com 2>/dev/null || curl -s -m 4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+DOMAIN="${PUBLIC_IP}.nip.io"
+
+echo "🌐 Current Server Public IP: $PUBLIC_IP"
+echo "🌐 Active Platform Domain:  $DOMAIN"
+
+# Step 6: Automatically acquire Let's Encrypt SSL if IP changed or cert missing
+HAS_CERT="no"
 if docker ps | grep -q auth_certbot; then
-    CERT_DIR=$(docker exec auth_certbot sh -c 'ls -1 /etc/letsencrypt/live 2>/dev/null | grep -v README | head -n 1' 2>/dev/null || true)
-    if [ -n "$CERT_DIR" ]; then
-        echo "🔒 Syncing SSL certificates for domain: $CERT_DIR"
-        docker exec auth_certbot cat /etc/letsencrypt/live/$CERT_DIR/fullchain.pem > ./nginx/ssl/cert.pem 2>/dev/null || true
-        docker exec auth_certbot cat /etc/letsencrypt/live/$CERT_DIR/privkey.pem > ./nginx/ssl/key.pem 2>/dev/null || true
-        docker compose restart nginx >/dev/null 2>&1 || true
+    if docker exec auth_certbot test -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" 2>/dev/null; then
+        HAS_CERT="yes"
     fi
 fi
 
-# Step 6: Determine Dynamic Public IP / Domain
-PUBLIC_IP=$(curl -s -m 3 http://checkip.amazonaws.com 2>/dev/null || curl -s -m 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-DOMAIN="${CERT_DIR:-${PUBLIC_IP}.nip.io}"
+if [ "$HAS_CERT" != "yes" ]; then
+    echo "🔒 New AWS IP detected ($PUBLIC_IP)! Requesting fresh Let's Encrypt SSL certificate for $DOMAIN..."
+    docker compose run --rm --entrypoint "\
+      certbot certonly --webroot -w /var/www/certbot \
+        --email admin@${DOMAIN} \
+        -d ${DOMAIN} \
+        --agree-tos \
+        --non-interactive" certbot || true
+fi
+
+# Step 7: Sync the active domain's SSL certificates to Nginx
+if docker exec auth_certbot test -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" 2>/dev/null; then
+    echo "🔒 Installing Let's Encrypt SSL certificates for $DOMAIN into Nginx..."
+    docker exec auth_certbot cat /etc/letsencrypt/live/$DOMAIN/fullchain.pem > ./nginx/ssl/cert.pem 2>/dev/null || true
+    docker exec auth_certbot cat /etc/letsencrypt/live/$DOMAIN/privkey.pem > ./nginx/ssl/key.pem 2>/dev/null || true
+    docker compose restart nginx >/dev/null 2>&1 || true
+fi
 
 echo ""
 echo "========================================================"
