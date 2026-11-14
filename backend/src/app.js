@@ -4,15 +4,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 
 import { globalLimiter } from './middleware/rateLimiter.js';
-import authRoutes from './routes/authRoutes.js';
-import enrollRoutes from './routes/enrollRoutes.js';
-import loginRoutes from './routes/loginRoutes.js';
-import deviceRoutes from './routes/deviceRoutes.js';
-import vapidRoutes from './routes/vapidRoutes.js';
-import webhookRoutes from './routes/webhookRoutes.js';
-import apiV1Routes from './routes/apiV1Routes.js';
-import tenantRoutes from './routes/tenantRoutes.js';
-import superAdminRoutes from './routes/superAdminRoutes.js';
+import apiRoutes from './routes/index.js';
 import { broadcastLog } from './services/logBroadcaster.js';
 
 const app = express();
@@ -89,17 +81,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// REST API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/enroll', enrollRoutes);
-app.use('/api/login', loginRoutes);
-app.use('/api/devices', deviceRoutes);
-app.use('/api/vapid-public-key', vapidRoutes);
-app.use('/api/webhooks', webhookRoutes);
-app.use('/api/v1/tenants/:tenantId', apiV1Routes);
-app.use('/api/v1', apiV1Routes);
-app.use('/api/tenant', tenantRoutes);
-app.use('/api/super-admin', superAdminRoutes);
+// Central API Router (All modular routes aggregated under /api)
+app.use('/api', apiRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

@@ -45,5 +45,6 @@ webpush.setVapidDetails(
   config.VAPID_PRIVATE_KEY
 );
 
+export * from './externalRoutes.js';
 export { webpush };
 

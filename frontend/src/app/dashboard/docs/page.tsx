@@ -45,11 +45,11 @@ export default function DocsPage() {
   const codeSnippets = {
     curl: {
       preauth: `# 1. Check if user is enrolled & what 2FA factors are ready
-curl -X GET "${originUrl}/api/v1/tenants/${tenantSlug}/users/status?email=customer@yourcompany.com" \\
+curl -X GET "${originUrl}/api/tenant/${tenantSlug}/users/status?email=customer@yourcompany.com" \\
   -H "X-Api-Key: ${liveApiKey}"`,
 
       push: `# 2. Option A: Trigger Phishing-Resistant 2FA Push Challenge
-curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge \\
+curl -X POST ${originUrl}/api/tenant/${tenantSlug}/push/challenge \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -57,7 +57,7 @@ curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge \\
   }'`,
 
       totp: `# 3. Option B: Verify 6-Digit TOTP Passcode
-curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify \\
+curl -X POST ${originUrl}/api/tenant/${tenantSlug}/totp/verify \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -66,7 +66,7 @@ curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify \\
   }'`,
 
       enroll: `# 4. If User Not Enrolled: Generate Setup QR Code
-curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/enroll \\
+curl -X POST ${originUrl}/api/tenant/${tenantSlug}/enroll \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: ${liveApiKey}" \\
   -d '{
@@ -77,14 +77,14 @@ curl -X POST ${originUrl}/api/v1/tenants/${tenantSlug}/enroll \\
 
     node: {
       preauth: `// 1. Check User Enrollment Status
-const statusRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/users/status?email=' + encodeURIComponent('customer@yourcompany.com'), {
+const statusRes = await fetch('${originUrl}/api/tenant/${tenantSlug}/users/status?email=' + encodeURIComponent('customer@yourcompany.com'), {
   headers: { 'X-Api-Key': '${liveApiKey}' },
 });
 const { enrolled, factors, activeDevices } = await statusRes.json();
 // factors: ['push', 'totp']`,
 
       push: `// 2. Option A: Trigger 2FA Push Challenge
-const challenge = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge', {
+const challenge = await fetch('${originUrl}/api/tenant/${tenantSlug}/push/challenge', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -97,7 +97,7 @@ console.log('Match number to display to customer:', challenge.challengeNumber);
 console.log('Status polling endpoint:', challenge.statusUrl);`,
 
       totp: `// 3. Option B: Verify 6-Digit TOTP Code
-const totpRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify', {
+const totpRes = await fetch('${originUrl}/api/tenant/${tenantSlug}/totp/verify', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -111,7 +111,7 @@ if (totpRes.valid) {
 }`,
 
       enroll: `// 4. Enroll User & Generate Setup QR Code
-const enrollRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/enroll', {
+const enrollRes = await fetch('${originUrl}/api/tenant/${tenantSlug}/enroll', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -132,7 +132,7 @@ const enrollRes = await fetch('${originUrl}/api/v1/tenants/${tenantSlug}/enroll'
 # 1. Check User Enrollment Status
 headers = {"X-Api-Key": "${liveApiKey}"}
 res = requests.get(
-    "${originUrl}/api/v1/tenants/${tenantSlug}/users/status",
+    "${originUrl}/api/tenant/${tenantSlug}/users/status",
     params={"email": "customer@yourcompany.com"},
     headers=headers
 )
@@ -143,7 +143,7 @@ print("Enrolled:", data.get("enrolled"), "Factors:", data.get("factors"))`,
 
 # 2. Option A: Trigger 2FA Push Challenge
 res = requests.post(
-    "${originUrl}/api/v1/tenants/${tenantSlug}/push/challenge",
+    "${originUrl}/api/tenant/${tenantSlug}/push/challenge",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={"email": "customer@yourcompany.com"}
 )
@@ -154,7 +154,7 @@ print("Display match number to user:", challenge["challengeNumber"])`,
 
 # 3. Option B: Verify 6-Digit TOTP Code
 res = requests.post(
-    "${originUrl}/api/v1/tenants/${tenantSlug}/totp/verify",
+    "${originUrl}/api/tenant/${tenantSlug}/totp/verify",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={"email": "customer@yourcompany.com", "code": "481920"}
 )
@@ -166,7 +166,7 @@ if result.get("valid"):
 
 # 4. Enroll User & Generate Setup QR Code
 res = requests.post(
-    "${originUrl}/api/v1/tenants/${tenantSlug}/enroll",
+    "${originUrl}/api/tenant/${tenantSlug}/enroll",
     headers={"X-Api-Key": "${liveApiKey}"},
     json={
         "email": "customer@yourcompany.com",
@@ -195,9 +195,9 @@ print("QR Code Data URL:", data["qrCodeDataUrl"])`,
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-white">Your Tenant Endpoint:</span>
+              <span className="text-xs font-semibold text-white">Your Tenant API Endpoint:</span>
               <code className="px-2 py-0.5 bg-blue-900/50 text-blue-300 font-mono text-xs rounded border border-blue-700/50">
-                /api/v1/tenants/{tenantSlug}/...
+                /api/tenant/{tenantSlug}/...
               </code>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">

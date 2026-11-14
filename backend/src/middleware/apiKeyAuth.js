@@ -2,6 +2,8 @@ import { verifyApiKey } from '../services/apiKeyService.js';
 
 /**
  * Middleware: Authenticate external requests using API Key (ag_live_... or ag_test_...)
+ * Enforces dual-check cross verification:
+ * If the route includes `:tenantId`, it ensures that the API Key belongs to that specific tenant!
  */
 export async function apiKeyAuth(req, res, next) {
   let rawKey = req.headers['x-api-key'];
@@ -22,7 +24,7 @@ export async function apiKeyAuth(req, res, next) {
   try {
     const authResult = await verifyApiKey(rawKey);
 
-    if (!authResult) {
+    if (!authResult || authResult.error === 'INVALID_KEY') {
       return res.status(401).json({ error: 'Invalid or revoked API key' });
     }
 
@@ -30,6 +32,17 @@ export async function apiKeyAuth(req, res, next) {
       return res.status(403).json({
         error: 'Tenant account is suspended. Please contact support.',
       });
+    }
+
+    // Cross-verify with URL path tenantId parameter if present
+    const pathTenantId = req.params.tenantId;
+    if (pathTenantId) {
+      const isMatch = authResult.tenant.id === pathTenantId || authResult.tenant.slug === pathTenantId;
+      if (!isMatch) {
+        return res.status(403).json({
+          error: `Forbidden: Tenant '${pathTenantId}' in URL does not match authenticated API Key credentials`,
+        });
+      }
     }
 
     req.tenant = authResult.tenant;

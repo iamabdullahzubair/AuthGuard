@@ -1,0 +1,664 @@
+import crypto from 'node:crypto';
+import { z } from 'zod';
+import { query } from '../db/index.js';
+import { hashPassword, verifyPassword, encryptAesGcm } from '../services/cryptoService.js';
+import { generateApiKey, listApiKeys, revokeApiKey } from '../services/apiKeyService.js';
+import { generateTotpSecret, generateQrCodeDataUrl } from '../services/totpService.js';
+import { deliverToWebhook } from '../services/tenantWebhookService.js';
+import { createMemberToken } from '../middleware/tenantSessionAuth.js';
+import { config } from '../config/index.js';
+
+const registerSchema = z.object({
+  email: z.string().email('Valid email required'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  companyName: z.string().min(2, 'Company name required'),
+  slug: z.string().min(2).max(40).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens').optional(),
+});
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string(),
+});
+
+const webhookCreateSchema = z.object({
+  url: z.string().url('Valid webhook URL required'),
+  customHeaders: z.record(z.string()).optional().default({}),
+  events: z.array(z.string()).optional().default(['login.approved', 'login.denied']),
+});
+
+export const tenantPortalController = {
+  /**
+   * POST /api/tenant/register
+   */
+  async register(req, res) {
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+
+    const { email, password, companyName, slug } = parsed.data;
+    const normalizedEmail = email.toLowerCase().trim();
+    const tenantSlug = slug || companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + crypto.randomBytes(3).toString('hex');
+
+    try {
+      const existingMember = await query(`SELECT id FROM tenant_members WHERE email = $1`, [normalizedEmail]);
+      if (existingMember.rows.length > 0) {
+        return res.status(409).json({ error: 'Email already registered. Please log in.' });
+      }
+
+      const existingSlug = await query(`SELECT id FROM tenants WHERE slug = $1`, [tenantSlug]);
+      if (existingSlug.rows.length > 0) {
+        return res.status(409).json({ error: 'Company slug already in use. Please choose another.' });
+      }
+
+      const tenantId = crypto.randomUUID();
+      const memberId = crypto.randomUUID();
+      const passwordHash = await hashPassword(password);
+
+      // 1. Create Tenant
+      await query(
+        `INSERT INTO tenants (id, name, slug, status, tier, branding)
+         VALUES ($1, $2, $3, 'active', 'developer', $4)`,
+        [
+          tenantId,
+          companyName,
+          tenantSlug,
+          JSON.stringify({ issuerName: companyName, primaryColor: '#3b82f6' }),
+        ]
+      );
+
+      // 2. Create Owner Member
+      await query(
+        `INSERT INTO tenant_members (id, tenant_id, email, password_hash, role, is_super_admin)
+         VALUES ($1, $2, $3, $4, 'owner', false)`,
+        [memberId, tenantId, normalizedEmail, passwordHash]
+      );
+
+      const token = createMemberToken({
+        memberId,
+        tenantId,
+        email: normalizedEmail,
+        role: 'owner',
+        isSuperAdmin: false,
+      });
+
+      return res.status(201).json({
+        success: true,
+        token,
+        member: { id: memberId, email: normalizedEmail, role: 'owner', isSuperAdmin: false },
+        tenant: { id: tenantId, name: companyName, slug: tenantSlug, tier: 'developer' },
+      });
+    } catch (err) {
+      console.error('[Tenant Register Error]:', err);
+      return res.status(500).json({ error: 'Registration failed. Please try again.' });
+    }
+  },
+
+  /**
+   * POST /api/tenant/login
+   */
+  async login(req, res) {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+
+    const { email, password } = parsed.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    try {
+      const memberRes = await query(
+        `SELECT tm.id as member_id, tm.tenant_id, tm.email, tm.password_hash, tm.role, tm.is_super_admin,
+                t.name as tenant_name, t.slug as tenant_slug, t.status as tenant_status, t.tier, t.branding
+         FROM tenant_members tm
+         LEFT JOIN tenants t ON tm.tenant_id = t.id
+         WHERE tm.email = $1`,
+        [normalizedEmail]
+      );
+
+      if (memberRes.rows.length === 0) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+      }
+
+      const member = memberRes.rows[0];
+
+      const passwordValid = await verifyPassword(member.password_hash, password);
+      if (!passwordValid) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+      }
+
+      if (member.tenant_status && member.tenant_status !== 'active' && !member.is_super_admin) {
+        return res.status(403).json({ error: 'Your tenant workspace is currently suspended' });
+      }
+
+      const token = createMemberToken({
+        memberId: member.member_id,
+        tenantId: member.tenant_id,
+        email: member.email,
+        role: member.role,
+        isSuperAdmin: Boolean(member.is_super_admin),
+      });
+
+      return res.json({
+        success: true,
+        token,
+        member: {
+          id: member.member_id,
+          email: member.email,
+          role: member.role,
+          isSuperAdmin: Boolean(member.is_super_admin),
+        },
+        tenant: member.tenant_id ? {
+          id: member.tenant_id,
+          name: member.tenant_name,
+          slug: member.tenant_slug,
+          tier: member.tier,
+          branding: typeof member.branding === 'string' ? JSON.parse(member.branding) : member.branding,
+        } : null,
+      });
+    } catch (err) {
+      console.error('[Tenant Login Error]:', err);
+      return res.status(500).json({ error: 'Login failed. Please try again.' });
+    }
+  },
+
+  /**
+   * GET /api/tenant/resolve/:slug
+   */
+  async resolveSlug(req, res) {
+    try {
+      const { slug } = req.params;
+      const result = await query(
+        `SELECT id, name, slug, status, tier, branding FROM tenants WHERE slug = $1`,
+        [slug.toLowerCase().trim()]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Tenant organization not found' });
+      }
+
+      const tenant = result.rows[0];
+      return res.json({
+        tenant: {
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          status: tenant.status,
+          tier: tenant.tier,
+          branding: typeof tenant.branding === 'string' ? JSON.parse(tenant.branding) : tenant.branding,
+        },
+      });
+    } catch (err) {
+      console.error('[Tenant Resolve Error]:', err);
+      return res.status(500).json({ error: 'Failed to resolve organization' });
+    }
+  },
+
+  /**
+   * GET /api/tenant/me
+   */
+  getMe(req, res) {
+    return res.json({
+      member: req.member,
+      tenant: req.tenant,
+    });
+  },
+
+  /**
+   * POST /api/tenant/exit-impersonation
+   */
+  async exitImpersonation(req, res) {
+    if (!req.member.isSuperAdmin) {
+      return res.status(403).json({ error: 'Only Super Admin can exit impersonation mode' });
+    }
+
+    const token = createMemberToken({
+      memberId: req.member.id,
+      tenantId: 'tenant_system_default',
+      email: req.member.email,
+      role: 'super_admin',
+      isSuperAdmin: true,
+    });
+
+    return res.json({
+      success: true,
+      token,
+      member: {
+        id: req.member.id,
+        email: req.member.email,
+        role: 'super_admin',
+        isSuperAdmin: true,
+      },
+      tenant: null,
+    });
+  },
+
+  /**
+   * GET /api/tenant/stats
+   */
+  async getStats(req, res) {
+    const tenantId = req.tenant.id;
+
+    try {
+      const usersCount = await query(`SELECT COUNT(*) as count FROM end_users WHERE tenant_id = $1`, [tenantId]);
+      const devicesCount = await query(`SELECT COUNT(*) as count FROM end_user_devices WHERE tenant_id = $1 AND status = 'active'`, [tenantId]);
+      const totalChallenges = await query(`SELECT COUNT(*) as count FROM auth_challenges WHERE tenant_id = $1`, [tenantId]);
+      const approvedChallenges = await query(`SELECT COUNT(*) as count FROM auth_challenges WHERE tenant_id = $1 AND status = 'approved'`, [tenantId]);
+      const recentLogs = await query(
+        `SELECT ac.id, ac.challenge_number, ac.status, ac.ip_address, ac.created_at, u.email
+         FROM auth_challenges ac
+         JOIN end_users u ON ac.end_user_id = u.id
+         WHERE ac.tenant_id = $1
+         ORDER BY ac.created_at DESC LIMIT 10`,
+        [tenantId]
+      );
+
+      const total = parseInt(totalChallenges.rows[0].count, 10);
+      const approved = parseInt(approvedChallenges.rows[0].count, 10);
+      const verificationRate = total > 0 ? Math.round((approved / total) * 100) : 100;
+
+      return res.json({
+        totalUsers: parseInt(usersCount.rows[0].count, 10),
+        activeDevices: parseInt(devicesCount.rows[0].count, 10),
+        totalChallenges: total,
+        approvedChallenges: approved,
+        verificationRate,
+        recentActivity: recentLogs.rows,
+      });
+    } catch (err) {
+      console.error('[Tenant Stats Error]:', err);
+      return res.status(500).json({ error: 'Failed to fetch tenant analytics' });
+    }
+  },
+
+  /**
+   * PATCH /api/tenant/branding
+   */
+  async updateBranding(req, res) {
+    const { issuerName, primaryColor, logoUrl } = req.body;
+    const currentBranding = req.tenant.branding || {};
+    const updatedBranding = {
+      ...currentBranding,
+      ...(issuerName ? { issuerName } : {}),
+      ...(primaryColor ? { primaryColor } : {}),
+      ...(logoUrl !== undefined ? { logoUrl } : {}),
+    };
+
+    try {
+      await query(
+        `UPDATE tenants SET branding = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(updatedBranding), req.tenant.id]
+      );
+
+      return res.json({ success: true, branding: updatedBranding });
+    } catch (err) {
+      console.error('[Update Branding Error]:', err);
+      return res.status(500).json({ error: 'Failed to update branding' });
+    }
+  },
+
+  /**
+   * GET /api/tenant/api-keys
+   */
+  async listApiKeys(req, res) {
+    const keys = await listApiKeys(req.tenant.id);
+    return res.json({ keys });
+  },
+
+  /**
+   * POST /api/tenant/api-keys
+   */
+  async createApiKey(req, res) {
+    const { name, environment } = req.body;
+    const newKey = await generateApiKey(req.tenant.id, name, environment || 'live');
+    return res.status(201).json({ key: newKey });
+  },
+
+  /**
+   * DELETE /api/tenant/api-keys/:id
+   */
+  async revokeApiKey(req, res) {
+    const revoked = await revokeApiKey(req.tenant.id, req.params.id);
+    if (!revoked) return res.status(404).json({ error: 'API key not found' });
+    return res.json({ success: true, message: 'API key revoked' });
+  },
+
+  /**
+   * GET /api/tenant/webhooks (Strictly tenant_id based)
+   */
+  async listWebhooks(req, res) {
+    const webhooks = await query(
+      `SELECT id, url, secret, custom_headers, events, is_active, created_at, updated_at
+       FROM tenant_webhooks
+       WHERE tenant_id = $1
+       ORDER BY created_at DESC`,
+      [req.tenant.id]
+    );
+
+    const deliveries = await query(
+      `SELECT twl.*, tw.url
+       FROM tenant_webhook_logs twl
+       JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
+       WHERE twl.tenant_id = $1
+       ORDER BY twl.created_at DESC LIMIT 20`,
+      [req.tenant.id]
+    );
+
+    return res.json({
+      webhooks: webhooks.rows,
+      deliveries: deliveries.rows,
+    });
+  },
+
+  /**
+   * POST /api/tenant/webhooks
+   */
+  async createWebhook(req, res) {
+    const parsed = webhookCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+
+    const { url, customHeaders, events } = parsed.data;
+    const webhookId = crypto.randomUUID();
+    const secret = crypto.randomBytes(24).toString('hex');
+
+    await query(
+      `INSERT INTO tenant_webhooks (id, tenant_id, url, secret, custom_headers, events, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)`,
+      [webhookId, req.tenant.id, url, secret, JSON.stringify(customHeaders), JSON.stringify(events)]
+    );
+
+    return res.status(201).json({
+      success: true,
+      webhook: {
+        id: webhookId,
+        url,
+        secret,
+        customHeaders,
+        events,
+      },
+    });
+  },
+
+  /**
+   * DELETE /api/tenant/webhooks/:id
+   */
+  async deleteWebhook(req, res) {
+    const result = await query(
+      `DELETE FROM tenant_webhooks WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+      [req.params.id, req.tenant.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Webhook not found' });
+    return res.json({ success: true, message: 'Webhook deleted' });
+  },
+
+  /**
+   * POST /api/tenant/webhooks/:id/test
+   */
+  async testWebhook(req, res) {
+    const check = await query(
+      `SELECT * FROM tenant_webhooks WHERE id = $1 AND tenant_id = $2`,
+      [req.params.id, req.tenant.id]
+    );
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Webhook not found' });
+
+    const hook = check.rows[0];
+    const testData = { message: 'AuthGuard test ping', time: new Date().toISOString() };
+    const deliveryResult = await deliverToWebhook(req.tenant.id, hook, 'test.ping', testData);
+
+    return res.json({ success: deliveryResult.success, status: deliveryResult.status, durationMs: deliveryResult.durationMs });
+  },
+
+  /**
+   * GET /api/tenant/users
+   */
+  async listUsers(req, res) {
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const result = await query(
+      `SELECT u.id, u.email, u.two_factor_enabled, u.created_at,
+              COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
+       FROM end_users u
+       LEFT JOIN end_user_devices d ON u.id = d.end_user_id
+       WHERE u.tenant_id = $1
+       GROUP BY u.id
+       ORDER BY u.created_at DESC LIMIT 100`,
+      [tenantId]
+    );
+
+    return res.json({ users: result.rows });
+  },
+
+  /**
+   * GET /api/tenant/users/enroll-status
+   */
+  async getUserEnrollStatus(req, res) {
+    const { email } = req.query;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email parameter required' });
+    }
+
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const check = await query(
+      `SELECT u.id, u.email, u.two_factor_enabled,
+              COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
+       FROM end_users u
+       LEFT JOIN end_user_devices d ON u.id = d.end_user_id
+       WHERE u.tenant_id = $1 AND u.email = $2
+       GROUP BY u.id`,
+      [tenantId, email.toLowerCase().trim()]
+    );
+
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const row = check.rows[0];
+    const activeDevices = parseInt(row.active_devices_count, 10);
+    const enrolled = Boolean(row.two_factor_enabled && activeDevices > 0);
+
+    return res.json({
+      enrolled,
+      twoFactorEnabled: Boolean(row.two_factor_enabled),
+      activeDevices,
+      userId: row.id,
+    });
+  },
+
+  /**
+   * PATCH /api/tenant/users/:id
+   */
+  async updateUser(req, res) {
+    const { email, two_factor_enabled } = req.body;
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const updates = [];
+    const values = [req.params.id, tenantId];
+    let idx = 3;
+
+    if (typeof email === 'string' && email.includes('@')) {
+      updates.push(`email = $${idx++}`);
+      values.push(email.toLowerCase().trim());
+    }
+    if (typeof two_factor_enabled === 'boolean') {
+      updates.push(`two_factor_enabled = $${idx++}`);
+      values.push(two_factor_enabled);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No update fields provided' });
+    }
+
+    updates.push(`updated_at = NOW()`);
+    const sql = `UPDATE end_users SET ${updates.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING id, email, two_factor_enabled, updated_at`;
+    const result = await query(sql, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json({ success: true, user: result.rows[0] });
+  },
+
+  /**
+   * DELETE /api/tenant/users/:id
+   */
+  async deleteUser(req, res) {
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const result = await query(
+      `DELETE FROM end_users WHERE id = $1 AND tenant_id = $2 RETURNING id, email`,
+      [req.params.id, tenantId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: `User ${result.rows[0].email} deleted successfully`,
+    });
+  },
+
+  /**
+   * POST /api/tenant/users/:id/reset-2fa
+   */
+  async resetUser2fa(req, res) {
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const userRes = await query(
+      `SELECT id, email FROM end_users WHERE id = $1 AND tenant_id = $2`,
+      [req.params.id, tenantId]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userRes.rows[0];
+
+    // Revoke devices and delete TOTP secret
+    await query(`DELETE FROM end_user_devices WHERE end_user_id = $1`, [user.id]);
+    await query(`DELETE FROM end_user_totp WHERE end_user_id = $1`, [user.id]);
+    await query(`UPDATE end_users SET two_factor_enabled = false, updated_at = NOW() WHERE id = $1`, [user.id]);
+
+    // Clean up main users table
+    await query(`UPDATE users SET two_factor_enabled = false WHERE email = $1`, [user.email]);
+    await query(`DELETE FROM devices WHERE user_id IN (SELECT id FROM users WHERE email = $1)`, [user.email]);
+
+    return res.json({
+      success: true,
+      message: `2FA reset for ${user.email}. User can now be re-enrolled.`,
+    });
+  },
+
+  /**
+   * POST /api/tenant/users/enroll
+   * Dashboard admin generates 2FA enrollment QR code for an end-user
+   */
+  async enrollUser(req, res) {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Valid user email required' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const tenantId = req.tenant?.id || 'tenant_system_default';
+    const issuer = req.tenant?.branding?.issuerName || req.tenant?.name || 'AuthGuard';
+
+    try {
+      // 1. Find or create in end_users
+      let endUserId;
+      const existing = await query(
+        `SELECT id FROM end_users WHERE tenant_id = $1 AND email = $2`,
+        [tenantId, normalizedEmail]
+      );
+
+      if (existing.rows.length > 0) {
+        endUserId = existing.rows[0].id;
+      } else {
+        endUserId = crypto.randomUUID();
+        await query(
+          `INSERT INTO end_users (id, tenant_id, email, two_factor_enabled)
+           VALUES ($1, $2, $3, false)`,
+          [endUserId, tenantId, normalizedEmail]
+        );
+      }
+
+      // 2. Also ensure presence in users table for device push resolution
+      let mainUserId;
+      const mainUserCheck = await query(`SELECT id FROM users WHERE email = $1`, [normalizedEmail]);
+      if (mainUserCheck.rows.length > 0) {
+        mainUserId = mainUserCheck.rows[0].id;
+      } else {
+        mainUserId = crypto.randomUUID();
+        const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
+        await query(
+          `INSERT INTO users (id, email, password_hash, two_factor_enabled)
+           VALUES ($1, $2, $3, false)`,
+          [mainUserId, normalizedEmail, dummyHash]
+        );
+      }
+
+      // 3. Generate TOTP secret & temporary enroll_token
+      const secret = generateTotpSecret();
+      const encryptedSecret = encryptAesGcm(secret);
+      const enrollToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+      // Invalidate existing temporary tokens
+      await query(
+        `UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`,
+        [mainUserId]
+      );
+
+      await query(
+        `INSERT INTO enroll_tokens (id, user_id, token, totp_secret_temp, expires_at, used)
+         VALUES ($1, $2, $3, $4, $5, false)`,
+        [crypto.randomUUID(), mainUserId, enrollToken, JSON.stringify(encryptedSecret), expiresAt]
+      );
+
+      // Save temporary secret to end_user_totp as well (with correct columns: tenant_id, iv, tag)
+      await query(
+        `INSERT INTO end_user_totp (id, tenant_id, end_user_id, encrypted_secret, iv, tag)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (end_user_id) 
+         DO UPDATE SET 
+           encrypted_secret = EXCLUDED.encrypted_secret,
+           iv = EXCLUDED.iv,
+           tag = EXCLUDED.tag`,
+        [crypto.randomUUID(), tenantId, endUserId, encryptedSecret.ciphertext, encryptedSecret.iv, encryptedSecret.tag]
+      );
+
+      // 4. Resolve Server URL dynamically from request
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const forwardedHost = req.headers['x-forwarded-host'];
+      const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+      const host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
+      const serverUrl = host ? `${protocol}://${host}` : config.APP_URL;
+
+      const qrPayload = {
+        server: serverUrl,
+        enroll_token: enrollToken,
+        secret,
+        account: normalizedEmail,
+        issuer,
+        tenant_id: tenantId,
+      };
+
+      const qrDataUrl = await generateQrCodeDataUrl(qrPayload);
+
+      return res.json({
+        success: true,
+        userId: endUserId,
+        email: normalizedEmail,
+        enrollToken,
+        totpSecret: secret,
+        qrCodeDataUrl: qrDataUrl,
+        qrPayload,
+        expiresAt: expiresAt.toISOString(),
+      });
+    } catch (err) {
+      console.error('[Tenant Enroll User Error]:', err);
+      return res.status(500).json({ error: 'Failed to generate user enrollment' });
+    }
+  },
+};
