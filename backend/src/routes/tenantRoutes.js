@@ -413,7 +413,8 @@ router.post('/users/enroll', async (req, res) => {
   }
 
   const normalizedEmail = email.toLowerCase().trim();
-  const tenantId = req.tenant.id;
+  const tenantId = req.tenant?.id || 'tenant_system_default';
+  const issuer = req.tenant?.branding?.issuerName || req.tenant?.name || 'AuthGuard';
 
   try {
     // 1. Find or create in end_users
@@ -467,12 +468,19 @@ router.post('/users/enroll', async (req, res) => {
       [crypto.randomUUID(), mainUserId, enrollToken, JSON.stringify(encryptedSecret), expiresAt]
     );
 
-    // Save temporary secret to end_user_totp as well
+    // Save temporary secret to end_user_totp as well (with correct columns: tenant_id, iv, tag)
     await query(
-      `INSERT INTO end_user_totp (id, end_user_id, encrypted_secret)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (end_user_id) DO UPDATE SET encrypted_secret = $3`,
-      [crypto.randomUUID(), endUserId, JSON.stringify(encryptedSecret)]
+      `INSERT INTO end_user_totp (id, tenant_id, end_user_id, encrypted_secret, iv, tag)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (end_user_id) DO UPDATE SET encrypted_secret = $4, iv = $5, tag = $6`,
+      [
+        crypto.randomUUID(),
+        tenantId,
+        endUserId,
+        encryptedSecret.ciphertext,
+        encryptedSecret.iv,
+        encryptedSecret.tag,
+      ]
     );
 
     // 4. Resolve Server URL dynamically from request

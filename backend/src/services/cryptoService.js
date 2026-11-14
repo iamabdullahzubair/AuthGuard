@@ -25,18 +25,37 @@ export function encryptAesGcm(plaintext) {
 }
 
 /**
- * Decrypt ciphertext using AES-256-GCM
- * @param {string} ciphertext 
- * @param {string} ivHex 
- * @param {string} tagHex 
+ * Decrypt ciphertext using AES-256-GCM (Supports both (ciphertext, iv, tag) and ({ ciphertext, iv, tag }) object)
+ * @param {string|{ ciphertext: string, iv: string, tag: string }} ciphertextOrObj 
+ * @param {string} [ivHex] 
+ * @param {string} [tagHex] 
  * @returns {string} plaintext
  */
-export function decryptAesGcm(ciphertext, ivHex, tagHex) {
-  const iv = Buffer.from(ivHex, 'hex');
-  const tag = Buffer.from(tagHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', AES_KEY, iv);
+export function decryptAesGcm(ciphertextOrObj, ivHex, tagHex) {
+  let ciphertext = ciphertextOrObj;
+  let iv = ivHex;
+  let tag = tagHex;
+
+  if (typeof ciphertextOrObj === 'object' && ciphertextOrObj !== null) {
+    ciphertext = ciphertextOrObj.ciphertext;
+    iv = ciphertextOrObj.iv;
+    tag = ciphertextOrObj.tag;
+  } else if (typeof ciphertextOrObj === 'string' && ciphertextOrObj.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(ciphertextOrObj);
+      if (parsed.ciphertext && parsed.iv && parsed.tag) {
+        ciphertext = parsed.ciphertext;
+        iv = parsed.iv;
+        tag = parsed.tag;
+      }
+    } catch {}
+  }
+
+  const ivBuf = Buffer.from(iv, 'hex');
+  const tagBuf = Buffer.from(tag, 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', AES_KEY, ivBuf);
   
-  decipher.setAuthTag(tag);
+  decipher.setAuthTag(tagBuf);
   let plaintext = decipher.update(ciphertext, 'hex', 'utf8');
   plaintext += decipher.final('utf8');
   return plaintext;

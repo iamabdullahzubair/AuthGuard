@@ -384,7 +384,7 @@ router.post('/totp/verify', authLimiter, async (req, res) => {
 
     if (req.tenant) {
       const tenantUser = await query(
-        `SELECT u.id, ut.encrypted_secret
+        `SELECT u.id, ut.encrypted_secret, ut.iv, ut.tag
          FROM end_users u
          JOIN end_user_totp ut ON u.id = ut.end_user_id
          WHERE u.tenant_id = $1 AND u.email = $2`,
@@ -392,10 +392,8 @@ router.post('/totp/verify', authLimiter, async (req, res) => {
       );
       if (tenantUser.rows.length > 0 && tenantUser.rows[0].encrypted_secret) {
         userId = tenantUser.rows[0].id;
-        const enc = typeof tenantUser.rows[0].encrypted_secret === 'string'
-          ? JSON.parse(tenantUser.rows[0].encrypted_secret)
-          : tenantUser.rows[0].encrypted_secret;
-        secret = decryptAesGcm(enc);
+        const row = tenantUser.rows[0];
+        secret = decryptAesGcm(row.encrypted_secret, row.iv, row.tag);
       }
     }
 
