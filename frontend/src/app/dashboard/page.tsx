@@ -46,7 +46,7 @@ export default function TenantOverviewPage() {
     setTestStatus('Sending push notification to user device(s)...');
 
     try {
-      const res = await apiClient('/api/v1/push/challenge', {
+      const res = await apiClient('/api/tenant/test-push', {
         method: 'POST',
         body: JSON.stringify({ email: testEmail }),
       });
@@ -57,7 +57,7 @@ export default function TenantOverviewPage() {
       // Poll status
       const timer = setInterval(async () => {
         try {
-          const s = await apiClient(`/api/v1/push/status/${res.requestId}`);
+          const s = await apiClient(`/api/tenant/push/status/${res.requestId}`);
           if (s.status === 'approved') {
             clearInterval(timer);
             setTestStatus('🎉 Push Challenge Approved by user!');

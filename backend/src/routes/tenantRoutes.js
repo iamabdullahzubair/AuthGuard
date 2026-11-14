@@ -7,16 +7,63 @@ import { authLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
 
-// ==========================================
+// ===============================================================
 // 1. PUBLIC ONBOARDING & TENANT RESOLUTION
-// ==========================================
+// ===============================================================
 router.post('/register', authLimiter, tenantPortalController.register);
 router.post('/login', authLimiter, tenantPortalController.login);
 router.get('/resolve/:slug', tenantPortalController.resolveSlug);
 
 // ===============================================================
-// 2. EXPOSED EXTERNAL CLIENT APIS (Protected by API Key & Tenant)
+// 2. TENANT PORTAL & DASHBOARD (Protected by Member Session JWT)
+//    CRITICAL: Fixed routes (/me, /stats, /users, etc.) MUST be
+//    mounted BEFORE parameterized /:tenantId routes to prevent
+//    path interception and 401 logout issues.
+// ===============================================================
+const portalRouter = Router();
+portalRouter.use(tenantSessionAuth);
+
+// Identity & Impersonation
+portalRouter.get('/me', tenantPortalController.getMe);
+portalRouter.post('/exit-impersonation', tenantPortalController.exitImpersonation);
+
+// Analytics & Branding
+portalRouter.get('/stats', tenantPortalController.getStats);
+portalRouter.patch('/branding', tenantPortalController.updateBranding);
+
+// API Keys Management
+portalRouter.get('/api-keys', tenantPortalController.listApiKeys);
+portalRouter.post('/api-keys', tenantPortalController.createApiKey);
+portalRouter.delete('/api-keys/:id', tenantPortalController.revokeApiKey);
+
+// Webhook Management (Strictly tenant_id based)
+portalRouter.get('/webhooks', tenantPortalController.listWebhooks);
+portalRouter.post('/webhooks', tenantPortalController.createWebhook);
+portalRouter.delete('/webhooks/:id', tenantPortalController.deleteWebhook);
+portalRouter.post('/webhooks/:id/test', tenantPortalController.testWebhook);
+
+// End-User Management & Enrollment
+portalRouter.get('/users', tenantPortalController.listUsers);
+portalRouter.get('/users/enroll-status', tenantPortalController.getUserEnrollStatus);
+portalRouter.post('/users/enroll', tenantPortalController.enrollUser);
+portalRouter.patch('/users/:id', tenantPortalController.updateUser);
+portalRouter.delete('/users/:id', tenantPortalController.deleteUser);
+portalRouter.post('/users/:id/reset-2fa', tenantPortalController.resetUser2fa);
+
+// Push Simulator & Status polling for Dashboard Session
+portalRouter.post('/test-push', async (req, res) => {
+  req.body.issuer = req.tenant.branding?.issuerName || req.tenant.name;
+  return tenantExternalApiController.triggerPushChallenge(req, res);
+});
+portalRouter.get('/push/status/:requestId', tenantExternalApiController.getPushStatus);
+
+router.use('/', portalRouter);
+
+// ===============================================================
+// 3. EXPOSED EXTERNAL CLIENT APIS (Protected by API Key & Tenant)
 //    Path: /api/tenant/:tenantId/*
+//    NOTE: Mounted AFTER fixed portal routes so that /stats, /me, /users
+//    are never intercepted by /:tenantId.
 // ===============================================================
 const externalRouter = Router({ mergeParams: true });
 externalRouter.use(apiKeyAuth);
@@ -28,37 +75,5 @@ externalRouter.post('/totp/verify', authLimiter, tenantExternalApiController.ver
 externalRouter.post('/enroll', tenantExternalApiController.enrollUserExternal);
 
 router.use('/:tenantId', externalRouter);
-
-// ===============================================================
-// 3. TENANT PORTAL & DASHBOARD (Protected by Member Session JWT)
-// ===============================================================
-router.use(tenantSessionAuth);
-
-// Identity & Impersonation
-router.get('/me', tenantPortalController.getMe);
-router.post('/exit-impersonation', tenantPortalController.exitImpersonation);
-
-// Analytics & Branding
-router.get('/stats', tenantPortalController.getStats);
-router.patch('/branding', tenantPortalController.updateBranding);
-
-// API Keys Management
-router.get('/api-keys', tenantPortalController.listApiKeys);
-router.post('/api-keys', tenantPortalController.createApiKey);
-router.delete('/api-keys/:id', tenantPortalController.revokeApiKey);
-
-// Webhook Management (Strictly tenant_id based)
-router.get('/webhooks', tenantPortalController.listWebhooks);
-router.post('/webhooks', tenantPortalController.createWebhook);
-router.delete('/webhooks/:id', tenantPortalController.deleteWebhook);
-router.post('/webhooks/:id/test', tenantPortalController.testWebhook);
-
-// End-User Management & Enrollment
-router.get('/users', tenantPortalController.listUsers);
-router.get('/users/enroll-status', tenantPortalController.getUserEnrollStatus);
-router.post('/users/enroll', tenantPortalController.enrollUser);
-router.patch('/users/:id', tenantPortalController.updateUser);
-router.delete('/users/:id', tenantPortalController.deleteUser);
-router.post('/users/:id/reset-2fa', tenantPortalController.resetUser2fa);
 
 export default router;

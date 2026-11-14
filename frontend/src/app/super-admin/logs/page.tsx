@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getStoredMember, getStoredToken } from '@/lib/api';
 import {
@@ -15,14 +15,15 @@ import {
   ChevronRight,
   ChevronDown,
   Radio,
+  RefreshCw,
 } from 'lucide-react';
 
 interface LogEntry {
-  id: string;
-  timestamp: string;
-  level: 'INFO' | 'WARN' | 'ERROR' | 'AUTH' | 'PUSH' | 'SECURITY';
-  category: 'api' | 'auth' | 'push' | 'tenant' | 'audit' | 'system';
-  message: string;
+  id?: string;
+  timestamp?: string;
+  level?: string;
+  category?: string;
+  message?: any;
   metadata?: Record<string, any> | null;
 }
 
@@ -39,6 +40,36 @@ export default function SuperAdminLogsPage() {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
 
+  // Fallback REST fetch function
+  const fetchRecentLogs = useCallback((token: string) => {
+    fetch('/api/super-admin/logs', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (data.redis?.connected) {
+          setRedisActive(true);
+        }
+        if (Array.isArray(data.logs)) {
+          setLogs((prev) => {
+            if (prev.length === 0) return data.logs;
+            // Merge & deduplicate by id
+            const existingIds = new Set(prev.map((l) => l.id).filter(Boolean));
+            const newEntries = data.logs.filter((l: LogEntry) => l.id && !existingIds.has(l.id));
+            if (newEntries.length === 0) return prev;
+            const merged = [...prev, ...newEntries];
+            return merged.length > 300 ? merged.slice(-300) : merged;
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('[Logs REST fetch]:', err.message);
+      });
+  }, []);
+
   useEffect(() => {
     const member = getStoredMember();
     const token = getStoredToken();
@@ -48,73 +79,83 @@ export default function SuperAdminLogsPage() {
       return;
     }
 
+    // 1. Initial REST fetch
+    fetchRecentLogs(token);
+
+    // 2. Establish live SSE stream
     let eventSource: EventSource | null = null;
+    let fallbackPollTimer: NodeJS.Timeout | null = null;
 
-    // Check system status first
-    fetch('/api/super-admin/logs', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.redis?.connected) {
-          setRedisActive(true);
+    try {
+      const sseUrl = `/api/super-admin/logs/stream?token=${encodeURIComponent(token)}`;
+      eventSource = new EventSource(sseUrl);
+
+      eventSource.onopen = () => {
+        setStatus('connected');
+        if (fallbackPollTimer) {
+          clearInterval(fallbackPollTimer);
+          fallbackPollTimer = null;
         }
-        if (Array.isArray(data.logs)) {
-          setLogs(data.logs);
+      };
+
+      eventSource.addEventListener('initial', (e: MessageEvent) => {
+        try {
+          const initial = JSON.parse(e.data);
+          if (Array.isArray(initial)) {
+            setLogs(initial);
+          }
+        } catch (err) {
+          console.warn('Failed to parse initial logs:', err);
         }
-      })
-      .catch(() => {});
+      });
 
-    // Establish live SSE stream
-    const sseUrl = `/api/super-admin/logs/stream?token=${encodeURIComponent(token)}`;
-    eventSource = new EventSource(sseUrl);
+      eventSource.addEventListener('log', (e: MessageEvent) => {
+        try {
+          const entry: LogEntry = JSON.parse(e.data);
+          if (!entry) return;
 
-    eventSource.onopen = () => {
-      setStatus('connected');
-    };
-
-    eventSource.addEventListener('initial', (e: MessageEvent) => {
-      try {
-        const initial = JSON.parse(e.data);
-        if (Array.isArray(initial)) {
-          setLogs(initial);
+          setLogs((prev) => {
+            // Avoid duplicate log entries by id
+            if (entry.id && prev.some((l) => l.id === entry.id)) {
+              return prev;
+            }
+            const next = [...prev, entry];
+            return next.length > 300 ? next.slice(-300) : next;
+          });
+        } catch (err) {
+          console.warn('Failed to parse log entry:', err);
         }
-      } catch (err) {
-        console.error('Failed to parse initial logs:', err);
-      }
-    });
+      });
 
-    eventSource.addEventListener('log', (e: MessageEvent) => {
-      try {
-        const entry: LogEntry = JSON.parse(e.data);
-        setLogs((prev) => {
-          const next = [...prev, entry];
-          // Keep max 300 logs in memory
-          if (next.length > 300) return next.slice(-300);
-          return next;
-        });
-      } catch (err) {
-        console.error('Failed to parse log entry:', err);
-      }
-    });
-
-    eventSource.onerror = () => {
+      eventSource.onerror = () => {
+        setStatus('error');
+        // Activate smooth polling fallback every 4 seconds if SSE drops
+        if (!fallbackPollTimer) {
+          fallbackPollTimer = setInterval(() => {
+            fetchRecentLogs(token);
+          }, 4000);
+        }
+      };
+    } catch {
       setStatus('error');
-    };
+    }
 
     return () => {
       if (eventSource) {
         eventSource.close();
       }
+      if (fallbackPollTimer) {
+        clearInterval(fallbackPollTimer);
+      }
     };
-  }, [router]);
+  }, [router, fetchRecentLogs]);
 
   // Auto-scroll when new logs arrive (if not paused)
   useEffect(() => {
     if (!isPaused && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs, isPaused]);
+  }, [logs.length, isPaused]);
 
   const handleClear = () => {
     setLogs([]);
@@ -132,21 +173,25 @@ export default function SuperAdminLogsPage() {
   };
 
   const filteredLogs = logs.filter((log) => {
-    if (filterLevel !== 'ALL' && log.level !== filterLevel) {
+    if (!log) return false;
+    const level = (log.level || 'INFO').toUpperCase();
+    if (filterLevel !== 'ALL' && level !== filterLevel) {
       return false;
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const matchMsg = log.message.toLowerCase().includes(q);
+      const msg = typeof log.message === 'object' ? JSON.stringify(log.message) : String(log.message ?? '');
+      const matchMsg = msg.toLowerCase().includes(q);
       const matchMeta = log.metadata ? JSON.stringify(log.metadata).toLowerCase().includes(q) : false;
-      const matchCat = log.category.toLowerCase().includes(q);
+      const matchCat = String(log.category || '').toLowerCase().includes(q);
       return matchMsg || matchMeta || matchCat;
     }
     return true;
   });
 
-  const getLevelBadge = (level: LogEntry['level']) => {
-    switch (level) {
+  const getLevelBadge = (level?: string) => {
+    const lvl = (level || 'INFO').toUpperCase();
+    switch (lvl) {
       case 'INFO':
         return 'bg-sky-500/10 text-sky-400 border-sky-500/30';
       case 'AUTH':
@@ -164,9 +209,11 @@ export default function SuperAdminLogsPage() {
     }
   };
 
-  const formatTimestamp = (ts: string) => {
+  const formatTimestamp = (ts?: string) => {
+    if (!ts) return '--:--:--';
     try {
       const d = new Date(ts);
+      if (isNaN(d.getTime())) return String(ts);
       return d.toLocaleTimeString('en-US', {
         hour12: false,
         hour: '2-digit',
@@ -175,7 +222,7 @@ export default function SuperAdminLogsPage() {
         fractionalSecondDigits: 3,
       });
     } catch {
-      return ts;
+      return String(ts);
     }
   };
 
@@ -197,9 +244,19 @@ export default function SuperAdminLogsPage() {
           <span className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-medium">
             <Radio className={`h-3.5 w-3.5 ${status === 'connected' ? 'text-emerald-400 animate-pulse' : 'text-amber-400'}`} />
             <span className={status === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>
-              {status === 'connected' ? 'SSE Live Stream Active' : status === 'error' ? 'Reconnecting...' : 'Connecting...'}
+              {status === 'connected' ? 'SSE Live Stream Active' : status === 'error' ? 'Live Stream Polling Active' : 'Connecting...'}
             </span>
           </span>
+          <button
+            onClick={() => {
+              const token = getStoredToken();
+              if (token) fetchRecentLogs(token);
+            }}
+            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors"
+            title="Refresh Logs"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
@@ -222,7 +279,7 @@ export default function SuperAdminLogsPage() {
                 ></span>
               </span>
               <span className={status === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>
-                {status === 'connected' ? 'Connected (Zero Lag)' : 'Connecting...'}
+                {status === 'connected' ? 'Connected (Zero Lag)' : 'Live Polling Mode'}
               </span>
             </div>
           </div>
@@ -360,19 +417,24 @@ export default function SuperAdminLogsPage() {
               <p className="text-[10px] text-slate-600">Send an API request, enroll a user, or dispatch a push challenge to see it stream live.</p>
             </div>
           ) : (
-            filteredLogs.map((log) => {
-              const isExpanded = expandedId === log.id;
-              const hasMeta = log.metadata && Object.keys(log.metadata).length > 0;
+            filteredLogs.map((log, index) => {
+              if (!log) return null;
+              const logKey = log.id ? `${log.id}-${index}` : `log-${index}`;
+              const isExpanded = expandedId === (log.id || logKey);
+              const hasMeta = log.metadata && typeof log.metadata === 'object' && Object.keys(log.metadata).length > 0;
+              const safeMsg = typeof log.message === 'object' ? JSON.stringify(log.message) : String(log.message ?? '');
+              const safeLevel = (log.level || 'INFO').toUpperCase();
+              const safeCategory = (log.category || 'system').toLowerCase();
 
               return (
                 <div
-                  key={log.id}
+                  key={logKey}
                   className="group border border-transparent hover:border-slate-800 hover:bg-slate-900/50 rounded p-1.5 transition-colors"
                 >
                   <div className="flex items-start gap-2.5">
                     {/* Expand Arrow if metadata exists */}
                     <button
-                      onClick={() => hasMeta && setExpandedId(isExpanded ? null : log.id)}
+                      onClick={() => hasMeta && setExpandedId(isExpanded ? null : (log.id || logKey))}
                       className={`text-slate-500 hover:text-white transition-colors mt-0.5 ${
                         !hasMeta ? 'opacity-20 cursor-default' : ''
                       }`}
@@ -392,34 +454,34 @@ export default function SuperAdminLogsPage() {
                     {/* Level Badge */}
                     <span
                       className={`px-1.5 py-0.2 rounded text-[10px] font-semibold border shrink-0 ${getLevelBadge(
-                        log.level
+                        safeLevel
                       )}`}
                     >
-                      [{log.level}]
+                      [{safeLevel}]
                     </span>
 
                     {/* Category */}
                     <span className="text-slate-400 font-semibold shrink-0">
-                      [{log.category}]
+                      [{safeCategory}]
                     </span>
 
                     {/* Message */}
                     <span
                       className={`flex-1 break-all ${
-                        log.level === 'ERROR'
+                        safeLevel === 'ERROR'
                           ? 'text-rose-300'
-                          : log.level === 'WARN'
+                          : safeLevel === 'WARN'
                           ? 'text-yellow-300'
-                          : log.level === 'SECURITY'
+                          : safeLevel === 'SECURITY'
                           ? 'text-amber-300'
-                          : log.level === 'PUSH'
+                          : safeLevel === 'PUSH'
                           ? 'text-purple-300'
-                          : log.level === 'AUTH'
+                          : safeLevel === 'AUTH'
                           ? 'text-emerald-300'
                           : 'text-slate-200'
                       }`}
                     >
-                      {log.message}
+                      {safeMsg}
                     </span>
                   </div>
 

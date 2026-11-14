@@ -36,7 +36,7 @@ app.use(globalLimiter);
 // High-Fidelity Request Logger (Dispatches to Console, Disk File, and Super Admin Live Stream)
 app.use((req, res, next) => {
   // Ignore noisy health checks and the SSE log stream itself from logging loops
-  if (req.path === '/api/health' || req.path === '/api/super-admin/logs/stream') {
+  if (req.path === '/api/health' || req.originalUrl?.includes('/logs/stream') || req.path?.includes('/logs/stream')) {
     return next();
   }
 
