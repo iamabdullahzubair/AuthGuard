@@ -388,6 +388,7 @@ router.post('/webhooks/:id/test', async (req, res) => {
  * End-Users Management
  */
 router.get('/users', async (req, res) => {
+  const tenantId = req.tenant?.id || 'tenant_system_default';
   const result = await query(
     `SELECT u.id, u.email, u.two_factor_enabled, u.created_at,
             COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
@@ -396,10 +397,135 @@ router.get('/users', async (req, res) => {
      WHERE u.tenant_id = $1
      GROUP BY u.id
      ORDER BY u.created_at DESC LIMIT 100`,
-    [req.tenant.id]
+    [tenantId]
   );
 
   return res.json({ users: result.rows });
+});
+
+/**
+ * GET /api/tenant/users/enroll-status
+ * Polls whether a user has scanned the QR code and completed device setup
+ */
+router.get('/users/enroll-status', async (req, res) => {
+  const { email } = req.query;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Email parameter required' });
+  }
+
+  const tenantId = req.tenant?.id || 'tenant_system_default';
+  const check = await query(
+    `SELECT u.id, u.email, u.two_factor_enabled,
+            COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
+     FROM end_users u
+     LEFT JOIN end_user_devices d ON u.id = d.end_user_id
+     WHERE u.tenant_id = $1 AND u.email = $2
+     GROUP BY u.id`,
+    [tenantId, email.toLowerCase().trim()]
+  );
+
+  if (check.rows.length === 0) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const row = check.rows[0];
+  const activeDevices = parseInt(row.active_devices_count, 10);
+  const enrolled = Boolean(row.two_factor_enabled && activeDevices > 0);
+
+  return res.json({
+    enrolled,
+    twoFactorEnabled: Boolean(row.two_factor_enabled),
+    activeDevices,
+    userId: row.id,
+  });
+});
+
+/**
+ * PATCH /api/tenant/users/:id
+ * Edit user details (e.g. email or toggle 2FA)
+ */
+router.patch('/users/:id', async (req, res) => {
+  const { email, two_factor_enabled } = req.body;
+  const tenantId = req.tenant?.id || 'tenant_system_default';
+  const updates = [];
+  const values = [req.params.id, tenantId];
+  let idx = 3;
+
+  if (typeof email === 'string' && email.includes('@')) {
+    updates.push(`email = $${idx++}`);
+    values.push(email.toLowerCase().trim());
+  }
+  if (typeof two_factor_enabled === 'boolean') {
+    updates.push(`two_factor_enabled = $${idx++}`);
+    values.push(two_factor_enabled);
+  }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: 'No update fields provided' });
+  }
+
+  updates.push(`updated_at = NOW()`);
+  const sql = `UPDATE end_users SET ${updates.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING id, email, two_factor_enabled, updated_at`;
+  const result = await query(sql, values);
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  return res.json({ success: true, user: result.rows[0] });
+});
+
+/**
+ * DELETE /api/tenant/users/:id
+ * Delete an end user and all associated credentials/devices
+ */
+router.delete('/users/:id', async (req, res) => {
+  const tenantId = req.tenant?.id || 'tenant_system_default';
+  const result = await query(
+    `DELETE FROM end_users WHERE id = $1 AND tenant_id = $2 RETURNING id, email`,
+    [req.params.id, tenantId]
+  );
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  return res.json({
+    success: true,
+    message: `User ${result.rows[0].email} deleted successfully`,
+  });
+});
+
+/**
+ * POST /api/tenant/users/:id/reset-2fa
+ * Reset 2FA configuration so the user can be freshly re-enrolled
+ */
+router.post('/users/:id/reset-2fa', async (req, res) => {
+  const tenantId = req.tenant?.id || 'tenant_system_default';
+  const userRes = await query(
+    `SELECT id, email FROM end_users WHERE id = $1 AND tenant_id = $2`,
+    [req.params.id, tenantId]
+  );
+
+  if (userRes.rows.length === 0) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const user = userRes.rows[0];
+
+  // Revoke devices and delete TOTP secret
+  await query(`DELETE FROM end_user_devices WHERE end_user_id = $1`, [user.id]);
+  await query(`DELETE FROM end_user_totp WHERE end_user_id = $1`, [user.id]);
+  await query(`UPDATE end_users SET two_factor_enabled = false, updated_at = NOW() WHERE id = $1`, [user.id]);
+
+  // Clean up main users table
+  await query(`UPDATE users SET two_factor_enabled = false WHERE email = $1`, [user.email]);
+  await query(`DELETE FROM devices WHERE user_id IN (SELECT id FROM users WHERE email = $1)`, [user.email]);
+
+  return res.json({
+    success: true,
+    message: `2FA reset for ${user.email}. User can now be re-enrolled.`,
+  });
 });
 
 /**

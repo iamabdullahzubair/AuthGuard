@@ -148,11 +148,15 @@ router.post('/complete', authLimiter, async (req, res) => {
     ]
   );
 
-  // Save device with status = 'pending_verification'
+  // 1. Resolve user email
+  const userCheck = await query(`SELECT email FROM users WHERE id = $1`, [userId]);
+  const userEmail = userCheck.rows[0]?.email;
+
+  // 2. Save device with status = 'active' (Scanning single-use token activates device immediately)
   const deviceId = crypto.randomUUID();
   await query(
     `INSERT INTO devices (id, user_id, device_name, push_subscription, public_key, status)
-     VALUES ($1, $2, $3, $4, $5, 'pending_verification')`,
+     VALUES ($1, $2, $3, $4, $5, 'active')`,
     [
       deviceId,
       userId,
@@ -162,20 +166,51 @@ router.post('/complete', authLimiter, async (req, res) => {
     ]
   );
 
-  // Mark token as used
+  // 3. Mark 2FA enabled on main users table
+  await query(`UPDATE users SET two_factor_enabled = true WHERE id = $1`, [userId]);
+
+  // 4. Also activate multi-tenant end_users and register end_user_devices if applicable
+  if (userEmail) {
+    const endUsersRes = await query(
+      `SELECT id, tenant_id FROM end_users WHERE email = $1`,
+      [userEmail]
+    );
+
+    for (const eu of endUsersRes.rows) {
+      await query(
+        `INSERT INTO end_user_devices (id, tenant_id, end_user_id, device_name, device_type, push_subscription, public_key, status)
+         VALUES ($1, $2, $3, $4, 'pwa', $5, $6, 'active')`,
+        [
+          crypto.randomUUID(),
+          eu.tenant_id,
+          eu.id,
+          device_name || 'Authenticator PWA',
+          JSON.stringify(push_subscription),
+          JSON.stringify(public_key),
+        ]
+      );
+
+      await query(
+        `UPDATE end_users SET two_factor_enabled = true, updated_at = NOW() WHERE id = $1`,
+        [eu.id]
+      );
+    }
+  }
+
+  // 5. Mark token as used
   await query(`UPDATE enroll_tokens SET used = true WHERE id = $1`, [tokenRecord.id]);
 
   await logAuditEvent({
     userId,
     event: 'ENROLL_DEVICE_REGISTERED',
     req,
-    metadata: { deviceId, deviceName: device_name },
+    metadata: { deviceId, deviceName: device_name, userEmail },
   });
 
   return res.json({
     success: true,
     deviceId,
-    message: 'Device enrolled. Please enter the current TOTP code on the website to complete 2FA setup.',
+    message: 'Device enrolled and 2FA activated successfully.',
   });
 });
 
