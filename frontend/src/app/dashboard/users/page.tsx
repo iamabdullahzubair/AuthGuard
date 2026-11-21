@@ -645,7 +645,7 @@ export default function UsersPage() {
       {deletingUser && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl relative">
-            <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2 text-rose-400">
+            <h3 className="text-base font-bold mb-2 flex items-center gap-2 text-rose-400">
               <AlertTriangle className="h-5 w-5 text-rose-500" />
               <span>Confirm Delete User</span>
             </h3>
