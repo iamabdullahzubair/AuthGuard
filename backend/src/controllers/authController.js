@@ -5,6 +5,7 @@ import { config } from '../config/index.js';
 import { verifyEcdsaSignature } from '../services/cryptoService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
+import { consumeEnrollToken, getChallenge, updateChallengeStatus } from '../services/redisService.js';
 
 const enrollCompleteSchema = z.object({
   enroll_token: z.string().min(32),
@@ -32,6 +33,8 @@ export const authController = {
 
   /**
    * POST /api/auth/enroll/complete (PWA endpoint)
+   * Consumes atomic single-use enroll token from Redis, pairs device in end_user_devices,
+   * activates 2FA for the end user, and stores TOTP secret in end_user_totp.
    */
   async completeEnrollment(req, res) {
     const parseResult = enrollCompleteSchema.safeParse(req.body);
@@ -41,105 +44,76 @@ export const authController = {
 
     const { enroll_token, push_subscription, public_key, device_name } = parseResult.data;
 
-    // Validate enroll_token
-    const tokenResult = await query(
-      `SELECT id, user_id, totp_secret_temp, expires_at, used
-       FROM enroll_tokens
-       WHERE token = $1`,
-      [enroll_token]
+    // 1. Consume from Redis (Atomic Single-Use with 15-min TTL)
+    const redisTokenData = await consumeEnrollToken(enroll_token);
+    if (!redisTokenData) {
+      return res.status(400).json({ error: 'Enrollment token is invalid, expired, or already used' });
+    }
+
+    const resolvedEndUserId = redisTokenData.endUserId || redisTokenData.userId;
+    const encSecretObj = redisTokenData.encSecretObj;
+
+    // 2. Fetch end user to verify and resolve tenant_id
+    const endUserCheck = await query(
+      `SELECT id, tenant_id, email FROM end_users WHERE id = $1`,
+      [resolvedEndUserId]
     );
 
-    if (tokenResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Invalid enrollment token' });
+    if (endUserCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'End user not found for this enrollment' });
     }
 
-    const tokenRecord = tokenResult.rows[0];
+    const endUser = endUserCheck.rows[0];
+    const tenantId = redisTokenData.tenantId || endUser.tenant_id;
 
-    if (tokenRecord.used) {
-      return res.status(400).json({ error: 'Enrollment token has already been used' });
-    }
-
-    if (new Date(tokenRecord.expires_at) < new Date()) {
-      return res.status(400).json({ error: 'Enrollment token has expired' });
-    }
-
-    const userId = tokenRecord.user_id;
-    const encSecretObj = JSON.parse(tokenRecord.totp_secret_temp);
-
-    // Save to totp_secrets
-    await query(
-      `INSERT INTO totp_secrets (id, user_id, encrypted_secret, iv, tag, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (user_id) 
-       DO UPDATE SET 
-         encrypted_secret = EXCLUDED.encrypted_secret,
-         iv = EXCLUDED.iv,
-         tag = EXCLUDED.tag,
-         updated_at = NOW()`,
-      [
-        crypto.randomUUID(),
-        userId,
-        encSecretObj.ciphertext,
-        encSecretObj.iv,
-        encSecretObj.tag,
-      ]
-    );
-
-    // Save device with status = 'active'
+    // 3. Register device in end_user_devices with status = 'active'
     const deviceId = crypto.randomUUID();
     await query(
-      `INSERT INTO devices (id, user_id, device_name, push_subscription, public_key, status)
-       VALUES ($1, $2, $3, $4, $5, 'active')`,
+      `INSERT INTO end_user_devices (id, tenant_id, end_user_id, device_name, device_type, push_subscription, public_key, status)
+       VALUES ($1, $2, $3, $4, 'pwa', $5, $6, 'active')`,
       [
         deviceId,
-        userId,
+        tenantId,
+        resolvedEndUserId,
         device_name || 'Authenticator App',
         JSON.stringify(push_subscription),
         JSON.stringify(public_key),
       ]
     );
 
-    await query(`UPDATE users SET two_factor_enabled = true WHERE id = $1`, [userId]);
-
-    // Resolve user email and bind multi-tenant end_user_devices
-    const userCheck = await query(`SELECT email FROM users WHERE id = $1`, [userId]);
-    const userEmail = userCheck.rows[0]?.email;
-
-    if (userEmail) {
-      const endUsersRes = await query(
-        `SELECT id, tenant_id FROM end_users WHERE email = $1`,
-        [userEmail]
+    // 4. Ensure TOTP secret is stored in end_user_totp if provided
+    if (encSecretObj?.ciphertext && encSecretObj?.iv && encSecretObj?.tag) {
+      await query(
+        `INSERT INTO end_user_totp (id, tenant_id, end_user_id, encrypted_secret, iv, tag)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (end_user_id)
+         DO UPDATE SET
+           encrypted_secret = EXCLUDED.encrypted_secret,
+           iv = EXCLUDED.iv,
+           tag = EXCLUDED.tag`,
+        [
+          crypto.randomUUID(),
+          tenantId,
+          resolvedEndUserId,
+          encSecretObj.ciphertext,
+          encSecretObj.iv,
+          encSecretObj.tag,
+        ]
       );
-
-      for (const eu of endUsersRes.rows) {
-        await query(
-          `INSERT INTO end_user_devices (id, tenant_id, end_user_id, device_name, device_type, push_subscription, public_key, status)
-           VALUES ($1, $2, $3, $4, 'pwa', $5, $6, 'active')`,
-          [
-            crypto.randomUUID(),
-            eu.tenant_id,
-            eu.id,
-            device_name || 'Authenticator App',
-            JSON.stringify(push_subscription),
-            JSON.stringify(public_key),
-          ]
-        );
-
-        await query(
-          `UPDATE end_users SET two_factor_enabled = true, updated_at = NOW() WHERE id = $1`,
-          [eu.id]
-        );
-      }
     }
 
-    // Mark token as used
-    await query(`UPDATE enroll_tokens SET used = true WHERE id = $1`, [tokenRecord.id]);
+    // 5. Activate 2FA on end_users
+    await query(
+      `UPDATE end_users SET two_factor_enabled = true, updated_at = NOW() WHERE id = $1`,
+      [resolvedEndUserId]
+    );
 
     await logAuditEvent({
-      userId,
+      tenantId,
+      userId: resolvedEndUserId,
       event: 'ENROLL_DEVICE_REGISTERED',
       req,
-      metadata: { deviceId, deviceName: device_name, userEmail },
+      metadata: { deviceId, deviceName: device_name, userEmail: endUser.email, tenantId },
     });
 
     return res.json({
@@ -151,37 +125,31 @@ export const authController = {
 
   /**
    * GET /api/auth/login/request/:id (PWA endpoint)
+   * Fetches the pending auth challenge details from Redis for out-of-band PWA display
    */
   async getLoginRequest(req, res) {
     const { id } = req.params;
 
-    const result = await query(
-      `SELECT lr.id, lr.user_id, lr.decoys, lr.status, lr.expires_at, u.email
-       FROM login_requests lr
-       JOIN users u ON lr.user_id = u.id
-       WHERE lr.id = $1`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Login request not found' });
+    const challenge = await getChallenge(id);
+    if (!challenge) {
+      return res.status(404).json({ error: 'Login request not found or expired' });
     }
 
-    const reqData = result.rows[0];
-    const isExpired = new Date(reqData.expires_at) < new Date();
+    const isExpired = new Date(challenge.expiresAt) < new Date();
 
     return res.json({
-      id: reqData.id,
-      userId: reqData.user_id,
-      account: reqData.email,
-      options: typeof reqData.decoys === 'string' ? JSON.parse(reqData.decoys) : reqData.decoys,
-      status: isExpired ? 'expired' : reqData.status,
-      expiresAt: reqData.expires_at,
+      id: challenge.id,
+      userId: challenge.endUserId,
+      account: challenge.account,
+      options: challenge.decoys,
+      status: isExpired ? 'expired' : challenge.status,
+      expiresAt: challenge.expiresAt,
     });
   },
 
   /**
-   * POST /api/auth/login/respond (PWA, signed)
+   * POST /api/auth/login/respond (PWA signed approval/denial)
+   * Verifies cryptographic ECDSA signature and updates challenge in Redis
    */
   async respondLogin(req, res) {
     const parseResult = respondSchema.safeParse(req.body);
@@ -197,24 +165,17 @@ export const authController = {
       return res.status(400).json({ error: 'Timestamp is outside acceptable window (replay protection)' });
     }
 
-    const reqResult = await query(
-      `SELECT id, user_id, challenge_number, status, expires_at 
-       FROM login_requests WHERE id = $1`,
-      [request_id]
-    );
-
-    if (reqResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Login request not found' });
+    const challenge = await getChallenge(request_id);
+    if (!challenge) {
+      return res.status(404).json({ error: 'Login request not found or expired' });
     }
 
-    const loginReq = reqResult.rows[0];
-
-    if (loginReq.status !== 'pending') {
-      return res.status(400).json({ error: `Login request is already ${loginReq.status}` });
+    if (challenge.status !== 'pending') {
+      return res.status(400).json({ error: `Login request is already ${challenge.status}` });
     }
 
-    if (new Date(loginReq.expires_at) < new Date()) {
-      await query(`UPDATE login_requests SET status = 'expired' WHERE id = $1`, [request_id]);
+    if (new Date(challenge.expiresAt) < new Date()) {
+      await updateChallengeStatus(request_id, 'expired');
       return res.status(400).json({ error: 'Login request has expired' });
     }
 
@@ -225,31 +186,19 @@ export const authController = {
       timestamp,
     });
 
-    // Check candidate devices across devices & end_user_devices
-    let candidateDevices = [];
-    let deviceQuery = `SELECT id, user_id, public_key, status, 'devices' as source_table FROM devices WHERE user_id = $1 AND status = 'active'`;
-    const deviceParams = [loginReq.user_id];
+    // Check candidate devices from end_user_devices
+    let deviceQuery = `
+      SELECT id, end_user_id, public_key, status
+      FROM end_user_devices
+      WHERE end_user_id = $1 AND status = 'active'
+    `;
+    const deviceParams = [challenge.endUserId];
     if (device_id) {
       deviceQuery += ` AND id = $2`;
       deviceParams.push(device_id);
     }
     const devicesResult = await query(deviceQuery, deviceParams);
-    candidateDevices.push(...devicesResult.rows);
-
-    let endUserDevQuery = `
-      SELECT d.id, d.end_user_id as user_id, d.public_key, d.status, 'end_user_devices' as source_table
-      FROM end_user_devices d
-      JOIN end_users eu ON d.end_user_id = eu.id
-      WHERE (d.end_user_id = $1 OR eu.email = (SELECT email FROM users WHERE id = $1))
-        AND d.status = 'active'
-    `;
-    const endUserDevParams = [loginReq.user_id];
-    if (device_id) {
-      endUserDevQuery += ` AND d.id = $2`;
-      endUserDevParams.push(device_id);
-    }
-    const endUserDevResult = await query(endUserDevQuery, endUserDevParams).catch(() => ({ rows: [] }));
-    candidateDevices.push(...endUserDevResult.rows);
+    const candidateDevices = devicesResult.rows;
 
     if (candidateDevices.length === 0) {
       return res.status(403).json({ error: 'No active device registered for this user' });
@@ -267,61 +216,68 @@ export const authController = {
 
     if (!verifiedDevice) {
       await logAuditEvent({
-        userId: loginReq.user_id,
+        tenantId: challenge.tenantId,
+        userId: challenge.endUserId,
         event: 'LOGIN_PUSH_SIGNATURE_INVALID',
         req,
-        metadata: { request_id },
+        metadata: { request_id, tenantId: challenge.tenantId },
       });
       return res.status(401).json({ error: 'Cryptographic signature verification failed' });
     }
 
     // Handle Deny
     if (decision === 'deny') {
-      await query(`UPDATE login_requests SET status = 'denied' WHERE id = $1`, [request_id]);
+      await updateChallengeStatus(request_id, 'denied', { deviceId: verifiedDevice.id });
 
-      const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
-      if (challengeCheck.rows.length > 0) {
-        const tenantId = challengeCheck.rows[0].tenant_id;
-        await query(`UPDATE auth_challenges SET status = 'denied' WHERE id = $1`, [request_id]).catch(() => {});
-        dispatchTenantWebhook(tenantId, 'login.denied', {
-          requestId: request_id,
-          status: 'denied',
-          reason: 'user_denied',
-          timestamp: Date.now(),
-        }).catch(() => {});
-      }
+      dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
+        requestId: request_id,
+        status: 'denied',
+        reason: 'user_denied',
+        timestamp: Date.now(),
+      }).catch(() => {});
 
       await logAuditEvent({
-        userId: loginReq.user_id,
+        tenantId: challenge.tenantId,
+        userId: challenge.endUserId,
         event: 'LOGIN_PUSH_DENIED_BY_USER',
         req,
-        metadata: { request_id, deviceId: verifiedDevice.id },
+        metadata: {
+          requestId: request_id,
+          challengeNumber: challenge.challengeNumber,
+          email: challenge.account,
+          deviceId: verifiedDevice.id,
+          tenantId: challenge.tenantId,
+        },
       });
 
       return res.json({ success: true, status: 'denied', message: 'Login denied.' });
     }
 
     // Handle Approve: check number match
-    if (chosen_number !== loginReq.challenge_number) {
-      await query(`UPDATE login_requests SET status = 'denied' WHERE id = $1`, [request_id]);
+    if (chosen_number !== challenge.challengeNumber) {
+      await updateChallengeStatus(request_id, 'denied', { deviceId: verifiedDevice.id });
 
-      const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
-      if (challengeCheck.rows.length > 0) {
-        const tenantId = challengeCheck.rows[0].tenant_id;
-        await query(`UPDATE auth_challenges SET status = 'denied' WHERE id = $1`, [request_id]).catch(() => {});
-        dispatchTenantWebhook(tenantId, 'login.denied', {
-          requestId: request_id,
-          status: 'denied',
-          reason: 'number_mismatch',
-          timestamp: Date.now(),
-        }).catch(() => {});
-      }
+      dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
+        requestId: request_id,
+        status: 'denied',
+        reason: 'number_mismatch',
+        timestamp: Date.now(),
+      }).catch(() => {});
 
       await logAuditEvent({
-        userId: loginReq.user_id,
+        tenantId: challenge.tenantId,
+        userId: challenge.endUserId,
         event: 'LOGIN_PUSH_NUMBER_MISMATCH',
         req,
-        metadata: { request_id, chosen_number, expected: loginReq.challenge_number },
+        metadata: {
+          requestId: request_id,
+          chosen_number,
+          challengeNumber: challenge.challengeNumber,
+          expected: challenge.challengeNumber,
+          email: challenge.account,
+          deviceId: verifiedDevice.id,
+          tenantId: challenge.tenantId,
+        },
       });
 
       return res.status(400).json({
@@ -331,38 +287,32 @@ export const authController = {
     }
 
     // Successful Approval
-    const userResult = await query('SELECT email FROM users WHERE id = $1', [loginReq.user_id]);
-    const userEmail = userResult.rows[0]?.email || '';
-
-    await query(`UPDATE login_requests SET status = 'approved' WHERE id = $1`, [request_id]);
-
-    if (verifiedDevice.source_table === 'end_user_devices') {
-      await query(`UPDATE end_user_devices SET last_used_at = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
-    } else {
-      await query(`UPDATE devices SET last_used = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
-    }
+    await updateChallengeStatus(request_id, 'approved', { deviceId: verifiedDevice.id });
+    await query(`UPDATE end_user_devices SET last_used_at = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
 
     await logAuditEvent({
-      userId: loginReq.user_id,
+      tenantId: challenge.tenantId,
+      userId: challenge.endUserId,
       event: 'LOGIN_PUSH_APPROVED',
       req,
-      metadata: { request_id, deviceId: verifiedDevice.id },
+      metadata: {
+        requestId: request_id,
+        challengeNumber: challenge.challengeNumber,
+        email: challenge.account,
+        deviceId: verifiedDevice.id,
+        tenantId: challenge.tenantId,
+      },
     });
 
     // Dispatch to tenant webhook
-    const challengeCheck = await query(`SELECT tenant_id FROM auth_challenges WHERE id = $1`, [request_id]).catch(() => ({ rows: [] }));
-    if (challengeCheck.rows.length > 0) {
-      const tenantId = challengeCheck.rows[0].tenant_id;
-      await query(`UPDATE auth_challenges SET status = 'approved' WHERE id = $1`, [request_id]).catch(() => {});
-      dispatchTenantWebhook(tenantId, 'login.approved', {
-        requestId: request_id,
-        userId: loginReq.user_id,
-        email: userEmail,
-        deviceId: verifiedDevice.id,
-        status: 'approved',
-        timestamp: Date.now(),
-      }).catch(() => {});
-    }
+    dispatchTenantWebhook(challenge.tenantId, 'login.approved', {
+      requestId: request_id,
+      userId: challenge.endUserId,
+      email: challenge.account,
+      deviceId: verifiedDevice.id,
+      status: 'approved',
+      timestamp: Date.now(),
+    }).catch(() => {});
 
     return res.json({
       success: true,

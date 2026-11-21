@@ -14,7 +14,7 @@ export const globalLimiter = rateLimit({
 // Strict rate limiter for auth / login / TOTP verification endpoints
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: config.NODE_ENV === 'test' ? 10000 : config.AUTH_RATE_LIMIT_MAX,
+  max: config.NODE_ENV === 'development' || config.NODE_ENV === 'test' ? 1000 : config.AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: false },

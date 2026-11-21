@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db/index.js';
 import { config } from '../config/index.js';
-import { encryptAesGcm, decryptAesGcm, hashPassword } from '../services/cryptoService.js';
+import { encryptAesGcm, decryptAesGcm } from '../services/cryptoService.js';
 import { generateTotpSecret, generateQrCodeDataUrl, verifyTotpTokenWithAntiReplay } from '../services/totpService.js';
 import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
+import { storeEnrollToken, storeChallenge, getChallenge } from '../services/redisService.js';
 
 const enrollSchema = z
   .object({
@@ -90,7 +91,7 @@ export const tenantExternalApiController = {
 
   /**
    * POST /api/tenant/:tenantId/push/challenge
-   * Triggers a 2FA Push notification to user's enrolled devices
+   * Triggers a 2FA Push notification to user's enrolled devices, stored in Redis
    */
   async triggerPushChallenge(req, res) {
     const parseResult = pushChallengeSchema.safeParse(req.body);
@@ -122,13 +123,7 @@ export const tenantExternalApiController = {
         [tenantId, user.id]
       );
 
-      // Also fallback check devices table
-      const legacyDevRes = await query(
-        `SELECT COUNT(*) as count FROM devices WHERE user_id IN (SELECT id FROM users WHERE email = $1) AND status = 'active'`,
-        [normalizedEmail]
-      );
-
-      const activeDevicesCount = parseInt(devRes.rows[0]?.count || 0, 10) + parseInt(legacyDevRes.rows[0]?.count || 0, 10);
+      const activeDevicesCount = parseInt(devRes.rows[0]?.count || 0, 10);
 
       if (activeDevicesCount === 0) {
         return res.status(400).json({
@@ -148,31 +143,20 @@ export const tenantExternalApiController = {
       const nonce = crypto.randomBytes(16).toString('hex');
       const expiresAt = new Date(Date.now() + 60 * 1000); // 60s lifetime
 
-      // Also get or ensure user in users table for session/login_requests compatibility
-      let mainUserId = user.id;
-      const mainUserCheck = await query(`SELECT id FROM users WHERE email = $1`, [normalizedEmail]);
-      if (mainUserCheck.rows.length > 0) {
-        mainUserId = mainUserCheck.rows[0].id;
-      }
-
-      // Invalidate any older pending requests
-      await query(
-        `UPDATE login_requests SET status = 'expired' WHERE user_id = $1 AND status = 'pending'`,
-        [mainUserId]
-      );
-
-      // Store in login_requests and auth_challenges
-      await query(
-        `INSERT INTO login_requests (id, user_id, challenge_number, decoys, status, nonce, expires_at)
-         VALUES ($1, $2, $3, $4, 'pending', $5, $6)`,
-        [requestId, mainUserId, challengeNumber, JSON.stringify(shuffledOptions), nonce, expiresAt]
-      );
-
-      await query(
-        `INSERT INTO auth_challenges (id, tenant_id, end_user_id, challenge_number, decoys, status, nonce, expires_at)
-         VALUES ($1, $2, $3, $4, 'pending', $5, $6)`,
-        [requestId, tenantId, user.id, challengeNumber, JSON.stringify(shuffledOptions), nonce, expiresAt]
-      ).catch(() => {});
+      // Store ephemeral challenge in Redis (120s TTL)
+      await storeChallenge(requestId, {
+        id: requestId,
+        tenantId,
+        endUserId: user.id,
+        challengeNumber,
+        decoys: shuffledOptions,
+        status: 'pending',
+        nonce,
+        ipAddress: req.ip || null,
+        expiresAt: expiresAt.toISOString(),
+        createdAt: new Date().toISOString(),
+        account: normalizedEmail,
+      }, 120);
 
       // 4. Send Web Push
       const pushPayload = {
@@ -188,13 +172,21 @@ export const tenantExternalApiController = {
         },
       };
 
-      const pushResult = await sendPushToUser(mainUserId, pushPayload, tenantId);
+      const pushResult = await sendPushToUser(user.id, pushPayload, tenantId);
 
       await logAuditEvent({
-        userId: mainUserId,
+        tenantId,
+        userId: user.id,
         event: 'API_PUSH_CHALLENGE_INITIATED',
         req,
-        metadata: { requestId, devicesSent: pushResult.sent, issuer: resolvedIssuer, tenantId },
+        metadata: {
+          requestId,
+          challengeNumber,
+          email: normalizedEmail,
+          devicesSent: pushResult.sent,
+          issuer: resolvedIssuer,
+          tenantId,
+        },
       });
 
       const tenantParam = req.params.tenantId || tenantId;
@@ -217,41 +209,31 @@ export const tenantExternalApiController = {
 
   /**
    * GET /api/tenant/:tenantId/push/status/:requestId
-   * Checks status of an initiated push challenge
+   * Checks status of an initiated push challenge from Redis
    */
   async getPushStatus(req, res) {
     const { requestId } = req.params;
 
     try {
+      const challenge = await getChallenge(requestId);
+
+      if (!challenge) {
+        return res.status(404).json({ error: 'Push request not found or expired' });
+      }
+
       // Cross-tenant verification: Ensure challenge belongs to current tenant
-      if (req.tenant?.id) {
-        const challengeCheck = await query(
-          `SELECT tenant_id FROM auth_challenges WHERE id = $1`,
-          [requestId]
-        );
-        if (challengeCheck.rows.length > 0 && challengeCheck.rows[0].tenant_id !== req.tenant.id) {
-          return res.status(403).json({ error: 'Forbidden: Request does not belong to this tenant workspace' });
-        }
+      if (req.tenant?.id && challenge.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: 'Forbidden: Request does not belong to this tenant workspace' });
       }
 
-      const result = await query(
-        `SELECT id, status, expires_at, created_at FROM login_requests WHERE id = $1`,
-        [requestId]
-      );
-
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Push request not found' });
-      }
-
-      const row = result.rows[0];
-      const isExpired = new Date(row.expires_at) < new Date();
-      const finalStatus = (row.status === 'pending' && isExpired) ? 'expired' : row.status;
+      const isExpired = new Date(challenge.expiresAt) < new Date();
+      const finalStatus = (challenge.status === 'pending' && isExpired) ? 'expired' : challenge.status;
 
       return res.json({
-        requestId: row.id,
+        requestId: challenge.id,
         status: finalStatus,
         isApproved: finalStatus === 'approved',
-        expiresAt: row.expires_at,
+        expiresAt: challenge.expiresAt,
       });
     } catch (err) {
       console.error('[External API Push Status Error]:', err);
@@ -261,7 +243,7 @@ export const tenantExternalApiController = {
 
   /**
    * POST /api/tenant/:tenantId/totp/verify
-   * Verifies 6-digit TOTP passcode for user
+   * Verifies 6-digit TOTP passcode for user strictly against end_user_totp with Redis anti-replay
    */
   async verifyTotp(req, res) {
     const rawId = req.body.username || req.body.email || req.body.identifier;
@@ -275,19 +257,7 @@ export const tenantExternalApiController = {
     const tenantId = req.tenant.id;
 
     try {
-      // Cross-tenant verification: User MUST belong to this tenant in end_users
-      const tenantEndUser = await query(
-        `SELECT id FROM end_users WHERE tenant_id = $1 AND email = $2`,
-        [tenantId, normalizedEmail]
-      );
-      if (tenantEndUser.rows.length === 0) {
-        return res.status(404).json({ error: 'User not found in this tenant workspace' });
-      }
-
-      let secret = null;
-      let userId = null;
-
-      // 1. Look up in end_user_totp
+      // Look up secret in end_user_totp
       const tenantUser = await query(
         `SELECT u.id, ut.encrypted_secret, ut.iv, ut.tag
          FROM end_users u
@@ -296,33 +266,15 @@ export const tenantExternalApiController = {
         [tenantId, normalizedEmail]
       );
 
-      if (tenantUser.rows.length > 0 && tenantUser.rows[0].encrypted_secret) {
-        userId = tenantUser.rows[0].id;
-        const row = tenantUser.rows[0];
-        secret = decryptAesGcm(row.encrypted_secret, row.iv, row.tag);
+      if (tenantUser.rows.length === 0 || !tenantUser.rows[0].encrypted_secret) {
+        return res.status(404).json({ error: 'User not found in this tenant or TOTP not enrolled' });
       }
 
-      // 2. Fallback to totp_secrets
-      if (!secret) {
-        const legacyUser = await query(
-          `SELECT u.id, t.encrypted_secret, t.iv, t.tag, u.two_factor_enabled 
-           FROM users u
-           LEFT JOIN totp_secrets t ON u.id = t.user_id
-           WHERE u.email = $1`,
-          [normalizedEmail]
-        );
-        if (legacyUser.rows.length > 0 && legacyUser.rows[0].encrypted_secret) {
-          userId = legacyUser.rows[0].id;
-          const row = legacyUser.rows[0];
-          secret = decryptAesGcm(row.encrypted_secret, row.iv, row.tag);
-        }
-      }
+      const row = tenantUser.rows[0];
+      const userId = row.id;
+      const secret = decryptAesGcm(row.encrypted_secret, row.iv, row.tag);
 
-      if (!secret || !userId) {
-        return res.status(404).json({ error: 'User not found or TOTP not enrolled' });
-      }
-
-      const verifyResult = await verifyTotpTokenWithAntiReplay(userId, secret, cleanCode);
+      const verifyResult = await verifyTotpTokenWithAntiReplay(userId, cleanCode, secret);
       if (!verifyResult.valid) {
         return res.status(400).json({
           success: false,
@@ -378,34 +330,19 @@ export const tenantExternalApiController = {
         );
       }
 
-      // 2. Also ensure presence in users table for device push resolution
-      let mainUserId;
-      const userRes = await query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
-      if (userRes.rows.length > 0) {
-        mainUserId = userRes.rows[0].id;
-      } else {
-        mainUserId = crypto.randomUUID();
-        const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
-        await query(
-          `INSERT INTO users (id, email, password_hash, two_factor_enabled)
-           VALUES ($1, $2, $3, false)`,
-          [mainUserId, normalizedEmail, dummyHash]
-        );
-      }
-
-      // 3. Generate TOTP secret and temporary enroll_token
+      // 2. Generate TOTP secret and temporary enroll_token (stored in Redis with 15 mins TTL)
       const secret = generateTotpSecret();
       const encryptedSecret = encryptAesGcm(secret);
       const enrollToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
-      await query(`UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`, [mainUserId]);
-
-      await query(
-        `INSERT INTO enroll_tokens (id, user_id, token, totp_secret_temp, expires_at, used)
-         VALUES ($1, $2, $3, $4, $5, false)`,
-        [crypto.randomUUID(), mainUserId, enrollToken, JSON.stringify(encryptedSecret), expiresAt]
-      );
+      await storeEnrollToken(enrollToken, {
+        endUserId,
+        tenantId,
+        username: normalizedEmail,
+        encSecretObj: encryptedSecret,
+        expiresAt: expiresAt.toISOString(),
+      }, 900);
 
       // Save to end_user_totp
       await query(
@@ -426,7 +363,7 @@ export const tenantExternalApiController = {
         timestamp: Date.now(),
       }).catch(() => {});
 
-      // 4. Resolve Server URL
+      // 3. Resolve Server URL
       const forwardedProto = req.headers['x-forwarded-proto'];
       const forwardedHost = req.headers['x-forwarded-host'];
       const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;

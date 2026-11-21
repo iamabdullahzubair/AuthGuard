@@ -2,6 +2,7 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
+import { setAntiReplayCode } from './redisService.js';
 
 // Configure authenticator according to RFC 6238 standard: 6 digits, 30 seconds step, SHA-1
 authenticator.options = {
@@ -43,36 +44,11 @@ export async function verifyTotpTokenWithAntiReplay(userId, token, secret) {
     return { valid: false, error: 'Incorrect TOTP code' };
   }
 
-  // Determine which window step matched to prevent reuse
-  const currentStep = Math.floor(Date.now() / 1000 / 30);
-  const candidateSteps = [currentStep, currentStep - 1, currentStep + 1];
-
-  let matchedStep = null;
-  for (const step of candidateSteps) {
-    // Check if token matches this specific step
-    // otplib time-based generator:
-    const expected = authenticator.generate(secret); // current
-    // We can verify against step by checking used_totp_codes
-    matchedStep = step;
-  }
-
-  // Check if code was already used for this user in recent steps
-  const existing = await query(
-    `SELECT id FROM used_totp_codes 
-     WHERE user_id = $1 AND code = $2 AND window_step >= $3`,
-    [userId, cleanToken, currentStep - 2]
-  );
-
-  if (existing.rows.length > 0) {
+  // Anti-Replay Protection via Redis TTL (90 seconds auto-eviction)
+  const isFresh = await setAntiReplayCode(userId, cleanToken, 90);
+  if (!isFresh) {
     return { valid: false, error: 'TOTP code has already been used. Please wait for the next code.' };
   }
-
-  // Record this code as used
-  await query(
-    `INSERT INTO used_totp_codes (id, user_id, code, window_step) 
-     VALUES ($1, $2, $3, $4)`,
-    [crypto.randomUUID(), userId, cleanToken, currentStep]
-  );
 
   return { valid: true };
 }

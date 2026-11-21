@@ -3,23 +3,44 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Shield, Building, Mail, Lock, ArrowRight, Loader2, Key } from 'lucide-react';
+import { Shield, Building, Mail, Lock, ArrowRight, Loader2, Key, RefreshCw, Globe } from 'lucide-react';
 import { apiClient, setStoredAuth } from '@/lib/api';
 
 export default function RegisterPage() {
   const router = useRouter();
   const [companyName, setCompanyName] = useState('');
   const [slug, setSlug] = useState('');
+  const [isSlugCustom, setIsSlugCustom] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const generateSlug = (val: string) => {
+    return val
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  };
+
   const handleCompanyNameChange = (val: string) => {
     setCompanyName(val);
-    if (!slug) {
-      setSlug(val.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+    if (!isSlugCustom) {
+      setSlug(generateSlug(val));
     }
+  };
+
+  const handleSlugChange = (val: string) => {
+    const cleaned = val.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    setSlug(cleaned);
+    const expected = generateSlug(companyName);
+    setIsSlugCustom(cleaned.length > 0 && cleaned !== expected);
+  };
+
+  const handleResetSlug = () => {
+    setSlug(generateSlug(companyName));
+    setIsSlugCustom(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -27,12 +48,14 @@ export default function RegisterPage() {
     setError(null);
     setLoading(true);
 
+    const finalSlug = slug.trim() || generateSlug(companyName);
+
     try {
       const res = await apiClient('/api/tenant/register', {
         method: 'POST',
         body: JSON.stringify({
           companyName,
-          slug,
+          slug: finalSlug,
           email,
           password,
         }),
@@ -84,17 +107,30 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                Tenant Slug (Subdomain / Identifier)
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                  Tenant Slug (URL Identifier)
+                </label>
+                {isSlugCustom && (
+                  <button
+                    type="button"
+                    onClick={handleResetSlug}
+                    className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>Auto-generate</span>
+                  </button>
+                )}
+              </div>
               <div className="relative">
+                <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
                 <input
                   type="text"
                   value={slug}
-                  onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                  placeholder="acme-corp"
+                  onChange={(e) => handleSlugChange(e.target.value)}
+                  placeholder="acme-financial"
                   required
-                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
                 />
               </div>
             </div>

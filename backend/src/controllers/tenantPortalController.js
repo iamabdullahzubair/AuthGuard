@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword, encryptAesGcm } from '../services/cryptoS
 import { generateApiKey, listApiKeys, revokeApiKey } from '../services/apiKeyService.js';
 import { generateTotpSecret, generateQrCodeDataUrl } from '../services/totpService.js';
 import { deliverToWebhook } from '../services/tenantWebhookService.js';
+import { storeEnrollToken } from '../services/redisService.js';
 import { createMemberToken } from '../middleware/tenantSessionAuth.js';
 import { config } from '../config/index.js';
 
@@ -242,20 +243,42 @@ export const tenantPortalController = {
     try {
       const usersCount = await query(`SELECT COUNT(*) as count FROM end_users WHERE tenant_id = $1`, [tenantId]);
       const devicesCount = await query(`SELECT COUNT(*) as count FROM end_user_devices WHERE tenant_id = $1 AND status = 'active'`, [tenantId]);
-      const totalChallenges = await query(`SELECT COUNT(*) as count FROM auth_challenges WHERE tenant_id = $1`, [tenantId]);
-      const approvedChallenges = await query(`SELECT COUNT(*) as count FROM auth_challenges WHERE tenant_id = $1 AND status = 'approved'`, [tenantId]);
-      const recentLogs = await query(
-        `SELECT ac.id, ac.challenge_number, ac.status, ac.ip_address, ac.created_at, u.email
-         FROM auth_challenges ac
-         JOIN end_users u ON ac.end_user_id = u.id
-         WHERE ac.tenant_id = $1
-         ORDER BY ac.created_at DESC LIMIT 10`,
+
+      // Calculate challenges from audit_logs
+      const totalChallengesRes = await query(
+        `SELECT COUNT(*) as count FROM audit_logs 
+         WHERE tenant_id = $1 AND event = 'API_PUSH_CHALLENGE_INITIATED'`,
+        [tenantId]
+      );
+      const approvedChallengesRes = await query(
+        `SELECT COUNT(*) as count FROM audit_logs 
+         WHERE tenant_id = $1 AND event = 'LOGIN_PUSH_APPROVED'`,
         [tenantId]
       );
 
-      const total = parseInt(totalChallenges.rows[0].count, 10);
-      const approved = parseInt(approvedChallenges.rows[0].count, 10);
-      const verificationRate = total > 0 ? Math.round((approved / total) * 100) : 100;
+      // Recent 10 challenge activity logs
+      const recentLogs = await query(
+        `SELECT al.id, 
+                COALESCE((al.metadata->>'challengeNumber')::int, (al.metadata->>'chosen_number')::int, 0) as challenge_number,
+                CASE 
+                  WHEN al.event = 'LOGIN_PUSH_APPROVED' THEN 'approved'
+                  WHEN al.event = 'LOGIN_PUSH_DENIED_BY_USER' THEN 'denied'
+                  WHEN al.event = 'LOGIN_PUSH_NUMBER_MISMATCH' THEN 'denied'
+                  ELSE 'pending'
+                END as status,
+                al.ip_address, 
+                al.created_at, 
+                COALESCE(al.metadata->>'email', u.email, 'User') as email
+         FROM audit_logs al
+         LEFT JOIN end_users u ON al.user_id = u.id
+         WHERE al.tenant_id = $1 AND al.event IN ('LOGIN_PUSH_APPROVED', 'LOGIN_PUSH_DENIED_BY_USER', 'LOGIN_PUSH_NUMBER_MISMATCH', 'API_PUSH_CHALLENGE_INITIATED')
+         ORDER BY al.created_at DESC LIMIT 10`,
+        [tenantId]
+      );
+
+      const total = parseInt(totalChallengesRes.rows[0].count, 10);
+      const approved = parseInt(approvedChallengesRes.rows[0].count, 10);
+      const verificationRate = total > 0 ? Math.min(100, Math.round((approved / total) * 100)) : 100;
 
       return res.json({
         totalUsers: parseInt(usersCount.rows[0].count, 10),
@@ -575,10 +598,6 @@ export const tenantPortalController = {
     await query(`DELETE FROM end_user_totp WHERE end_user_id = $1`, [user.id]);
     await query(`UPDATE end_users SET two_factor_enabled = false, updated_at = NOW() WHERE id = $1`, [user.id]);
 
-    // Clean up main users table
-    await query(`UPDATE users SET two_factor_enabled = false WHERE email = $1`, [user.email]);
-    await query(`DELETE FROM devices WHERE user_id IN (SELECT id FROM users WHERE email = $1)`, [user.email]);
-
     return res.json({
       success: true,
       message: `2FA reset for ${user.email}. User can now be re-enrolled.`,
@@ -618,38 +637,19 @@ export const tenantPortalController = {
         );
       }
 
-      // 2. Also ensure presence in users table for device push resolution
-      let mainUserId;
-      const mainUserCheck = await query(`SELECT id FROM users WHERE email = $1`, [normalizedEmail]);
-      if (mainUserCheck.rows.length > 0) {
-        mainUserId = mainUserCheck.rows[0].id;
-      } else {
-        mainUserId = crypto.randomUUID();
-        const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
-        await query(
-          `INSERT INTO users (id, email, password_hash, two_factor_enabled)
-           VALUES ($1, $2, $3, false)`,
-          [mainUserId, normalizedEmail, dummyHash]
-        );
-      }
-
-      // 3. Generate TOTP secret & temporary enroll_token
+      // 2. Generate TOTP secret & temporary enroll_token (Stored in Redis with 15 mins TTL)
       const secret = generateTotpSecret();
       const encryptedSecret = encryptAesGcm(secret);
       const enrollToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
-      // Invalidate existing temporary tokens
-      await query(
-        `UPDATE enroll_tokens SET used = true WHERE user_id = $1 AND used = false`,
-        [mainUserId]
-      );
-
-      await query(
-        `INSERT INTO enroll_tokens (id, user_id, token, totp_secret_temp, expires_at, used)
-         VALUES ($1, $2, $3, $4, $5, false)`,
-        [crypto.randomUUID(), mainUserId, enrollToken, JSON.stringify(encryptedSecret), expiresAt]
-      );
+      await storeEnrollToken(enrollToken, {
+        endUserId,
+        tenantId,
+        username: normalizedEmail,
+        encSecretObj: encryptedSecret,
+        expiresAt: expiresAt.toISOString(),
+      }, 900);
 
       // Save temporary secret to end_user_totp as well (with correct columns: tenant_id, iv, tag)
       await query(

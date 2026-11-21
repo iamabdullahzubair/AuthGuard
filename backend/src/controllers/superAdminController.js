@@ -15,7 +15,9 @@ export const superAdminController = {
       const usersCount = await query(`SELECT COUNT(*) as total FROM end_users`);
       const devicesCount = await query(`SELECT COUNT(*) as total FROM end_user_devices WHERE status = 'active'`);
       const challengesCount = await query(
-        `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'approved') as approved FROM auth_challenges`
+        `SELECT COUNT(*) FILTER (WHERE event = 'API_PUSH_CHALLENGE_INITIATED') as total,
+                COUNT(*) FILTER (WHERE event = 'LOGIN_PUSH_APPROVED') as approved 
+         FROM audit_logs`
       );
       const webhooksCount = await query(`SELECT COUNT(*) as total FROM tenant_webhooks WHERE is_active = true`);
 
@@ -32,7 +34,7 @@ export const superAdminController = {
         challenges: {
           total: totalChallenges,
           approved: approvedChallenges,
-          rate: totalChallenges > 0 ? Math.round((approvedChallenges / totalChallenges) * 100) : 100,
+          rate: totalChallenges > 0 ? Math.min(100, Math.round((approvedChallenges / totalChallenges) * 100)) : 100,
         },
         webhooks: parseInt(webhooksCount.rows[0].total, 10),
         adminUser: req.member.email,

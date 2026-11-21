@@ -21,9 +21,9 @@ export async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
 
-  // Fetch user to verify account is still active
+  // Fetch tenant member to verify account is still active
   const result = await query(
-    `SELECT id, email, two_factor_enabled FROM users WHERE id = $1`,
+    `SELECT id, email, role, is_super_admin FROM tenant_members WHERE id = $1`,
     [payload.userId]
   );
 
@@ -34,4 +34,3 @@ export async function requireAuth(req, res, next) {
   req.user = result.rows[0];
   next();
 }
-

@@ -72,6 +72,17 @@ export function verifyMemberToken(token) {
  * Middleware: Authenticate Tenant Member / Dashboard Session
  */
 export async function tenantSessionAuth(req, res, next) {
+  // If request is authenticated via API Key or targeting external tenant endpoints, pass through to externalRouter
+  if (
+    req.headers['x-api-key'] ||
+    (req.headers.authorization && req.headers.authorization.toLowerCase().startsWith('bearer ag_')) ||
+    req.path.includes('/push/challenge') ||
+    req.path.includes('/totp/verify') ||
+    req.path.includes('/users/status')
+  ) {
+    return next();
+  }
+
   let token = null;
 
   if (req.headers.authorization) {

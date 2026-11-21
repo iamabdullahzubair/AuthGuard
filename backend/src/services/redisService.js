@@ -190,4 +190,116 @@ export function subscribeEvent(channel, callback) {
   };
 }
 
+/**
+ * Check and record a TOTP code as used (Anti-Replay Protection).
+ * Returns true if fresh (allowed), false if already used (replay attack).
+ * Uses Redis atomic SET NX with TTL (default 90s).
+ * @param {string} userId
+ * @param {string} code
+ * @param {number} [ttlSeconds=90]
+ * @returns {Promise<boolean>}
+ */
+export async function setAntiReplayCode(userId, code, ttlSeconds = 90) {
+  const key = `used_totp:${userId}:${code}`;
+  if (isRedisReady()) {
+    try {
+      const res = await redisClient.set(key, '1', 'EX', ttlSeconds, 'NX');
+      return res === 'OK';
+    } catch {
+      // Fallback on connection error
+    }
+  }
+
+  // High-speed In-Memory fallback
+  const item = memoryCache.get(key);
+  if (item && (!item.expiresAt || item.expiresAt > Date.now())) {
+    return false;
+  }
+  memoryCache.set(key, { value: '1', expiresAt: Date.now() + ttlSeconds * 1000 });
+  return true;
+}
+
+/**
+ * Stores single-use temporary enrollment token in Redis with TTL (default 15 minutes / 900s)
+ * @param {string} token
+ * @param {object} data
+ * @param {number} [ttlSeconds=900]
+ */
+export async function storeEnrollToken(token, data, ttlSeconds = 900) {
+  const key = `enroll_token:${token}`;
+  await cacheSet(key, data, ttlSeconds);
+}
+
+/**
+ * Atomically retrieves and deletes a temporary enrollment token (Single-Use consumption)
+ * @param {string} token
+ * @returns {Promise<any|null>}
+ */
+export async function consumeEnrollToken(token) {
+  const key = `enroll_token:${token}`;
+  if (isRedisReady()) {
+    try {
+      if (typeof redisClient.getdel === 'function') {
+        const raw = await redisClient.getdel(key);
+        if (!raw) return null;
+        try { return JSON.parse(raw); } catch { return raw; }
+      }
+      const raw = await redisClient.get(key);
+      if (!raw) return null;
+      await redisClient.del(key);
+      try { return JSON.parse(raw); } catch { return raw; }
+    } catch {
+      // Fallback on error
+    }
+  }
+
+  // In-Memory fallback
+  const item = memoryCache.get(key);
+  if (!item) return null;
+  if (item.expiresAt && Date.now() > item.expiresAt) {
+    memoryCache.delete(key);
+    return null;
+  }
+  memoryCache.delete(key);
+  return item.value;
+}
+
+/**
+ * Stores an auth push challenge in Redis with a TTL (default 120s)
+ * @param {string} challengeId
+ * @param {object} data - { id, tenantId, endUserId, challengeNumber, decoys, status: 'pending', nonce, ipAddress, expiresAt, account }
+ * @param {number} [ttlSeconds=120]
+ */
+export async function storeChallenge(challengeId, data, ttlSeconds = 120) {
+  const key = `challenge:${challengeId}`;
+  await cacheSet(key, data, ttlSeconds);
+}
+
+/**
+ * Retrieves an auth push challenge from Redis
+ * @param {string} challengeId
+ * @returns {Promise<any|null>}
+ */
+export async function getChallenge(challengeId) {
+  const key = `challenge:${challengeId}`;
+  return await cacheGet(key);
+}
+
+/**
+ * Updates status of an auth push challenge in Redis
+ * Keeps key cached for an extra 60s so status pollers see final state
+ * @param {string} challengeId
+ * @param {string} status - 'approved' | 'denied' | 'expired'
+ * @param {object} [extra] - extra fields (e.g. deviceId)
+ * @returns {Promise<any|null>}
+ */
+export async function updateChallengeStatus(challengeId, status, extra = {}) {
+  const key = `challenge:${challengeId}`;
+  const existing = await cacheGet(key);
+  if (!existing) return null;
+  const updated = { ...existing, status, ...extra, updatedAt: new Date().toISOString() };
+  await cacheSet(key, updated, 60);
+  return updated;
+}
+
 export { redisClient };
