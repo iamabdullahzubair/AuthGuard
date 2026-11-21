@@ -33,7 +33,7 @@ describe('Tenant Webhooks & External Client Tenant API', () => {
 
     // 2. Generate API Key
     const keyData = await generateApiKey(tenantId, 'Test Key', 'live');
-    apiKeyRaw = keyData.key;
+    apiKeyRaw = keyData.rawKey || keyData.key;
 
     // 3. Create End User
     await query(

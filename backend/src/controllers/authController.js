@@ -5,7 +5,7 @@ import { config } from '../config/index.js';
 import { verifyEcdsaSignature } from '../services/cryptoService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
-import { consumeEnrollToken, getChallenge, updateChallengeStatus } from '../services/redisService.js';
+import { consumeEnrollToken, getChallenge, getPendingChallengeForAccount, updateChallengeStatus } from '../services/redisService.js';
 
 const enrollCompleteSchema = z.object({
   enroll_token: z.string().min(32),
@@ -19,6 +19,8 @@ const respondSchema = z.object({
   challenge_id: z.string().optional(),
   challengeId: z.string().optional(),
   chosen_number: z.number().int().optional().default(0),
+  chosen_word: z.string().optional(),
+  typed_word: z.string().optional(),
   decision: z.enum(['approve', 'deny']),
   timestamp: z.number().int(),
   signature: z.string().min(10),
@@ -128,6 +130,41 @@ export const authController = {
   },
 
   /**
+   * GET /api/auth/challenge/pending (PWA endpoint)
+   * Fetches the latest pending challenge for an account
+   */
+  async getPendingChallenge(req, res) {
+    const { account } = req.query;
+    if (!account) {
+      return res.status(400).json({ error: 'account query parameter is required' });
+    }
+
+    const challenge = await getPendingChallengeForAccount(account);
+    if (!challenge) {
+      return res.json({ pending: false });
+    }
+
+    const isExpired = new Date(challenge.expiresAt) < new Date();
+    if (isExpired) {
+      return res.json({ pending: false });
+    }
+
+    return res.json({
+      pending: true,
+      id: challenge.id,
+      requestId: challenge.id,
+      challengeId: challenge.id,
+      userId: challenge.endUserId,
+      account: challenge.account,
+      mode: challenge.mode || 'number_choice',
+      options: challenge.decoys || [],
+      challengeNumber: challenge.challengeNumber,
+      status: challenge.status,
+      expiresAt: challenge.expiresAt,
+    });
+  },
+
+  /**
    * GET /api/auth/login/request/:id (PWA endpoint)
    * Fetches the pending auth challenge details from Redis for out-of-band PWA display
    */
@@ -143,9 +180,11 @@ export const authController = {
 
     return res.json({
       id: challenge.id,
+      challengeId: challenge.id,
       userId: challenge.endUserId,
       account: challenge.account,
-      options: challenge.decoys,
+      mode: challenge.mode || 'number_choice',
+      options: challenge.decoys || [],
       status: isExpired ? 'expired' : challenge.status,
       expiresAt: challenge.expiresAt,
     });
@@ -260,39 +299,81 @@ export const authController = {
       return res.json({ success: true, status: 'denied', message: 'Login denied.' });
     }
 
-    // Handle Approve: check number match
-    if (chosen_number !== challenge.challengeNumber) {
-      await updateChallengeStatus(effectiveChallengeId, 'denied', { deviceId: verifiedDevice.id });
+    // Handle Approve based on verification mode (number_choice, word_input, one_click)
+    const mode = challenge.mode || 'number_choice';
 
-      dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
-        challengeId: effectiveChallengeId,
-        requestId: effectiveChallengeId,
-        status: 'denied',
-        reason: 'number_mismatch',
-        timestamp: Date.now(),
-      }).catch(() => {});
+    if (mode === 'number_choice') {
+      if (chosen_number !== challenge.challengeNumber) {
+        await updateChallengeStatus(effectiveChallengeId, 'denied', { deviceId: verifiedDevice.id });
 
-      await logAuditEvent({
-        tenantId: challenge.tenantId,
-        userId: challenge.endUserId,
-        event: 'LOGIN_PUSH_NUMBER_MISMATCH',
-        req,
-        metadata: {
+        dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
           challengeId: effectiveChallengeId,
           requestId: effectiveChallengeId,
-          chosen_number,
-          challengeNumber: challenge.challengeNumber,
-          expected: challenge.challengeNumber,
-          email: challenge.account,
-          deviceId: verifiedDevice.id,
-          tenantId: challenge.tenantId,
-        },
-      });
+          status: 'denied',
+          reason: 'number_mismatch',
+          timestamp: Date.now(),
+        }).catch(() => {});
 
-      return res.status(400).json({
-        error: 'Selected number does not match challenge. Request denied.',
-        status: 'denied',
-      });
+        await logAuditEvent({
+          tenantId: challenge.tenantId,
+          userId: challenge.endUserId,
+          event: 'LOGIN_PUSH_NUMBER_MISMATCH',
+          req,
+          metadata: {
+            challengeId: effectiveChallengeId,
+            requestId: effectiveChallengeId,
+            chosen_number,
+            challengeNumber: challenge.challengeNumber,
+            expected: challenge.challengeNumber,
+            email: challenge.account,
+            deviceId: verifiedDevice.id,
+            tenantId: challenge.tenantId,
+          },
+        });
+
+        return res.status(400).json({
+          error: 'Selected number does not match challenge. Request denied.',
+          status: 'denied',
+        });
+      }
+    } else if (mode === 'word_input') {
+      const typedWord = String(parseResult.data.chosen_word || parseResult.data.typed_word || '').trim().toUpperCase();
+      const expectedWord = String(challenge.challengeWord || '').trim().toUpperCase();
+
+      if (!typedWord || typedWord !== expectedWord) {
+        await updateChallengeStatus(effectiveChallengeId, 'denied', { deviceId: verifiedDevice.id });
+
+        dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
+          challengeId: effectiveChallengeId,
+          requestId: effectiveChallengeId,
+          status: 'denied',
+          reason: 'word_mismatch',
+          timestamp: Date.now(),
+        }).catch(() => {});
+
+        await logAuditEvent({
+          tenantId: challenge.tenantId,
+          userId: challenge.endUserId,
+          event: 'LOGIN_PUSH_WORD_MISMATCH',
+          req,
+          metadata: {
+            challengeId: effectiveChallengeId,
+            requestId: effectiveChallengeId,
+            typedWord,
+            expectedWord,
+            email: challenge.account,
+            deviceId: verifiedDevice.id,
+            tenantId: challenge.tenantId,
+          },
+        });
+
+        return res.status(400).json({
+          error: 'Verification word does not match challenge. Request denied.',
+          status: 'denied',
+        });
+      }
+    } else if (mode === 'one_click') {
+      // 1-Click Tap-to-Approve: Direct approval without matching check
     }
 
     // Successful Approval

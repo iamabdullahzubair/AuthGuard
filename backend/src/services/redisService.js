@@ -273,6 +273,9 @@ export async function consumeEnrollToken(token) {
 export async function storeChallenge(challengeId, data, ttlSeconds = 120) {
   const key = `challenge:${challengeId}`;
   await cacheSet(key, data, ttlSeconds);
+  if (data.account) {
+    await cacheSet(`pending_challenge:${data.account.toLowerCase()}`, challengeId, ttlSeconds);
+  }
 }
 
 /**
@@ -283,6 +286,20 @@ export async function storeChallenge(challengeId, data, ttlSeconds = 120) {
 export async function getChallenge(challengeId) {
   const key = `challenge:${challengeId}`;
   return await cacheGet(key);
+}
+
+/**
+ * Retrieves the latest active pending challenge for an account
+ * @param {string} account
+ * @returns {Promise<any|null>}
+ */
+export async function getPendingChallengeForAccount(account) {
+  if (!account) return null;
+  const challengeId = await cacheGet(`pending_challenge:${account.toLowerCase()}`);
+  if (!challengeId) return null;
+  const challenge = await getChallenge(challengeId);
+  if (!challenge || challenge.status !== 'pending') return null;
+  return challenge;
 }
 
 /**
@@ -299,6 +316,9 @@ export async function updateChallengeStatus(challengeId, status, extra = {}) {
   if (!existing) return null;
   const updated = { ...existing, status, ...extra, updatedAt: new Date().toISOString() };
   await cacheSet(key, updated, 60);
+  if (existing.account && (status === 'approved' || status === 'denied')) {
+    await cacheDel(`pending_challenge:${existing.account.toLowerCase()}`);
+  }
   return updated;
 }
 

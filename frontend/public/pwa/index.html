@@ -103,11 +103,22 @@
           </div>
           <h2 id="approval-title" class="approval-title">Login Approval Request</h2>
           <p id="approval-account" style="font-weight: 600; color: var(--accent-blue); margin-bottom: 4px;"></p>
-          <p class="approval-subtext">
+          <p id="approval-subtext" class="approval-subtext">
             To prevent push fatigue attacks, select the matching <strong>2-digit number</strong> displayed on your login screen:
           </p>
 
           <div id="number-matching-grid" class="number-matching-grid"></div>
+
+          <div id="word-matching-container" style="display: none; margin: 14px 0;">
+            <input
+              type="text"
+              id="approval-word-input"
+              placeholder="ENTER WORD (e.g. HAWK)"
+              autocomplete="off"
+              autocapitalize="characters"
+              style="width: 100%; text-align: center; font-size: 1.2rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; padding: 12px; border-radius: 12px; background: rgba(15, 23, 42, 0.9); border: 1.5px solid #3b82f6; color: #fff; outline: none; box-sizing: border-box;"
+            />
+          </div>
 
           <div class="approval-actions">
             <button id="btn-deny-login" class="btn btn-danger">

@@ -73,10 +73,19 @@ export default function UsersPage() {
     fetchUsers();
   }, []);
 
-  // Auto-poll enrollment status while QR modal is active
+  // Auto-poll enrollment status while QR modal is active (gentle 4s polling with 3-min timeout)
   useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 45; // 45 * 4s = 3 minutes max
+
     if (showModal && enrollResult && !autoConfirmed) {
       pollIntervalRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+          return;
+        }
+
         try {
           const target = enrollResult.username || enrollResult.email;
           const status = await apiClient(
@@ -84,13 +93,13 @@ export default function UsersPage() {
           );
           if (status.enrolled) {
             setAutoConfirmed(true);
-            clearInterval(pollIntervalRef.current);
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             fetchUsers();
           }
         } catch {
           // ignore polling transient errors
         }
-      }, 1500);
+      }, 4000);
     }
 
     return () => {
@@ -147,8 +156,17 @@ export default function UsersPage() {
         [email]: `Matching #: ${res.challengeNumber} (Pending...)`,
       }));
 
-      // Poll push resolution
+      // Poll push resolution (3s interval, max 25 attempts / 75 seconds)
+      let attempts = 0;
       const timer = setInterval(async () => {
+        attempts++;
+        if (attempts > 25) {
+          clearInterval(timer);
+          setPushStatus((prev) => ({ ...prev, [email]: '⏱ Expired' }));
+          setTriggeringUser(null);
+          return;
+        }
+
         try {
           const s = await apiClient(`/api/v1/push/status/${res.requestId}`);
           if (s.status === 'approved') {
@@ -165,7 +183,7 @@ export default function UsersPage() {
             setTriggeringUser(null);
           }
         } catch {}
-      }, 1500);
+      }, 3000);
     } catch (err: any) {
       setPushStatus((prev) => ({ ...prev, [email]: `Error: ${err.message}` }));
       setTriggeringUser(null);
@@ -489,7 +507,7 @@ export default function UsersPage() {
                       </div>
                       <div className="text-xs text-slate-300 font-semibold">{enrollResult.username || enrollResult.email}</div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
-                        Issuer: <strong>{enrollResult.issuer}</strong>
+                        Issuer: <strong className="text-slate-300">{enrollResult.issuer || enrollResult.qrPayload?.issuer || 'AuthGuard'}</strong>
                       </div>
                     </div>
 

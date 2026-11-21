@@ -74,6 +74,17 @@ export async function sendPushToUser(userId, payload, tenantId = null) {
           : dev.push_subscription
       );
 
+      // Support local sync dev/fallback devices without failing or pruning
+      if (
+        subscription?.localFallback ||
+        subscription?.mock ||
+        subscription?.endpoint?.startsWith('local-sync')
+      ) {
+        console.log(`[Push] Device ${dev.id} (${dev.device_name}) uses local sync fallback. Push simulated.`);
+        sent++;
+        continue;
+      }
+
       await webpush.sendNotification(subscription, payloadString, {
         TTL: 60, // 60 seconds matching challenge lifetime
         urgency: 'high',

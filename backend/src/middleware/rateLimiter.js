@@ -4,10 +4,20 @@ import { config } from '../config/index.js';
 // General API rate limiter
 export const globalLimiter = rateLimit({
   windowMs: config.RATE_LIMIT_WINDOW_MS,
-  max: config.NODE_ENV === 'test' ? 10000 : config.RATE_LIMIT_MAX,
+  max: config.NODE_ENV === 'development' || config.NODE_ENV === 'test' ? 10000 : config.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: false },
+  skip: (req) => {
+    const p = req.path || '';
+    return (
+      p === '/api/health' ||
+      p.endsWith('/vapid-public-key') ||
+      p.includes('/challenge/') ||
+      p.includes('/enroll-status') ||
+      p.includes('/push/status')
+    );
+  },
   message: { error: 'Too many requests, please try again later.' },
 });
 

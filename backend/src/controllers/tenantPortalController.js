@@ -298,7 +298,7 @@ export const tenantPortalController = {
    * PATCH /api/tenant/branding
    */
   async updateBranding(req, res) {
-    const { issuerName, primaryColor, logoUrl } = req.body;
+    const { issuerName, primaryColor, logoUrl, verificationMode } = req.body;
     const currentBranding = req.tenant.branding || {};
     const updatedBranding = {
       ...currentBranding,
@@ -307,16 +307,25 @@ export const tenantPortalController = {
       ...(logoUrl !== undefined ? { logoUrl } : {}),
     };
 
+    const validModes = ['number_choice', 'one_click', 'word_input'];
+    const newVerificationMode = validModes.includes(verificationMode)
+      ? verificationMode
+      : (req.tenant.verification_mode || 'number_choice');
+
     try {
       await query(
-        `UPDATE tenants SET branding = $1, updated_at = NOW() WHERE id = $2`,
-        [JSON.stringify(updatedBranding), req.tenant.id]
+        `UPDATE tenants SET branding = $1, verification_mode = $2, updated_at = NOW() WHERE id = $3`,
+        [JSON.stringify(updatedBranding), newVerificationMode, req.tenant.id]
       );
 
-      return res.json({ success: true, branding: updatedBranding });
+      return res.json({
+        success: true,
+        branding: updatedBranding,
+        verificationMode: newVerificationMode,
+      });
     } catch (err) {
       console.error('[Update Branding Error]:', err);
-      return res.status(500).json({ error: 'Failed to update branding' });
+      return res.status(500).json({ error: 'Failed to update branding & verification mode' });
     }
   },
 
@@ -769,6 +778,7 @@ export const tenantPortalController = {
         success: true,
         userId: endUserId,
         username: normalizedEmail,
+        issuer,
         enrollToken,
         totpSecret: secret,
         qrCodeDataUrl: qrDataUrl,

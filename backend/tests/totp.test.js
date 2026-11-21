@@ -12,21 +12,6 @@ import crypto from 'node:crypto';
 describe('TOTP Service (RFC 6238)', () => {
   const testUserId = crypto.randomUUID();
 
-  before(async () => {
-    // Insert dummy user for foreign key constraints
-    await query(
-      `INSERT INTO users (id, email, password_hash) 
-       VALUES ($1, $2, 'dummyhash') 
-       ON CONFLICT DO NOTHING`,
-      [testUserId, `totp-test-${Date.now()}@example.com`]
-    );
-  });
-
-  after(async () => {
-    await query(`DELETE FROM used_totp_codes WHERE user_id = $1`, [testUserId]);
-    await query(`DELETE FROM users WHERE id = $1`, [testUserId]);
-  });
-
   test('generateTotpSecret generates valid base32 string', () => {
     const secret = generateTotpSecret();
     assert.equal(typeof secret, 'string');

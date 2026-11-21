@@ -11,6 +11,7 @@ router.get('/vapid-public-key', authController.getVapidPublicKey);
 router.post('/enroll/complete', authLimiter, authController.completeEnrollment);
 
 // Clean RESTful Challenge Endpoints
+router.get('/challenge/pending', authController.getPendingChallenge);
 router.get('/challenge/:id', authController.getLoginRequest);
 router.post('/challenge/respond', authLimiter, authController.respondLogin);
 

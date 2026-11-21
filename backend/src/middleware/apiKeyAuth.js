@@ -66,7 +66,7 @@ export async function apiKeyAuth(req, res, next) {
       const decoded = verifyMemberToken(sessionToken);
       if (decoded && decoded.tenantId) {
         const tenantCheck = await query(
-          `SELECT id, name, slug, status, tier, branding FROM tenants WHERE id = $1`,
+          `SELECT id, name, slug, status, tier, verification_mode, branding FROM tenants WHERE id = $1`,
           [decoded.tenantId]
         );
         if (tenantCheck.rows.length > 0) {

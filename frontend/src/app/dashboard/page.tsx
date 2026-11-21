@@ -109,8 +109,16 @@ export default function TenantOverviewPage() {
       setTestResult(res);
       setTestStatus(`Push sent! Present number ${res.challengeNumber} to user.`);
 
-      // Poll status
+      // Poll status (3s interval, max 25 attempts / 75 seconds)
+      let attempts = 0;
       const timer = setInterval(async () => {
+        attempts++;
+        if (attempts > 25) {
+          clearInterval(timer);
+          setTestStatus('⏱️ Push Challenge Expired.');
+          return;
+        }
+
         try {
           const s = await apiClient(`/api/tenant/push/status/${res.requestId}`);
           if (s.status === 'approved') {
@@ -128,7 +136,7 @@ export default function TenantOverviewPage() {
         } catch {
           // ignore transient polling errors
         }
-      }, 1500);
+      }, 3000);
     } catch (err: any) {
       setTestStatus(`Error: ${err.message}`);
     } finally {

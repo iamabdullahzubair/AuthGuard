@@ -52,7 +52,7 @@ export function showToast(message, type = 'info', duration = 3500) {
   toastContainerEl.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = '0';
-    toast.style.transform = 'translateY(10px)';
+    toast.style.transform = 'translateX(20px)';
     setTimeout(() => toast.remove(), 250);
   }, duration);
 }
@@ -76,6 +76,29 @@ export function switchView(viewName) {
     startScanning();
   } else {
     stopCameraScanner();
+  }
+
+  if (viewName === 'approval') {
+    const approveBtn = document.getElementById('btn-approve-login');
+    const denyBtn = document.getElementById('btn-deny-login');
+    if (!activeApprovalRequest) {
+      const titleEl = document.getElementById('approval-title');
+      const subtextEl = document.getElementById('approval-subtext');
+      const accountEl = document.getElementById('approval-account');
+      const gridEl = document.getElementById('number-matching-grid');
+      const wordContainerEl = document.getElementById('word-matching-container');
+
+      if (titleEl) titleEl.textContent = 'No Pending Approvals';
+      if (accountEl) accountEl.textContent = '';
+      if (subtextEl) subtextEl.innerHTML = 'There are no active login challenges right now. When a login request is made, it will appear here automatically.';
+      if (gridEl) gridEl.style.display = 'none';
+      if (wordContainerEl) wordContainerEl.style.display = 'none';
+      if (approveBtn) approveBtn.style.display = 'none';
+      if (denyBtn) denyBtn.style.display = 'none';
+    } else {
+      if (approveBtn) approveBtn.style.display = '';
+      if (denyBtn) denyBtn.style.display = '';
+    }
   }
 
   if (viewName === 'settings') {
@@ -126,10 +149,39 @@ async function initApp() {
     if (deepRequestId) {
       loadApprovalRequest(deepRequestId);
     }
+
+    // 7. Start in-app polling for pending challenges (ensures instant approvals even if FCM is offline/laptop)
+    startChallengePolling();
   } catch (err) {
     console.error('PWA Initialization error:', err);
     showToast(err.message, 'error');
   }
+}
+
+// In-app challenge polling loop
+let challengePollInterval = null;
+
+function startChallengePolling() {
+  if (challengePollInterval) clearInterval(challengePollInterval);
+  challengePollInterval = setInterval(async () => {
+    // Only check if user has accounts and not currently reviewing an active request
+    if (!accounts || accounts.length === 0 || activeApprovalRequest) return;
+    for (const acc of accounts) {
+      if (acc.type !== 'authguard_push') continue;
+      try {
+        const serverUrl = acc.server || window.location.origin;
+        const res = await fetch(`${serverUrl}/api/auth/challenge/pending?account=${encodeURIComponent(acc.account)}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data && data.pending && data.id) {
+          handleIncomingLoginRequest(data);
+          break;
+        }
+      } catch (e) {
+        // Silently continue polling
+      }
+    }
+  }, 2500);
 }
 
 // Refresh Accounts from IndexedDB
@@ -371,6 +423,10 @@ async function handleQrEnrollment(qrRawString) {
     showToast('Subscribing to Push Notifications...', 'info');
     const pushSubscription = await subscribeToPush(serverUrl);
 
+    if (pushSubscription && pushSubscription.localFallback) {
+      showToast('Push service unavailable on laptop; paired via live in-app sync!', 'info', 4500);
+    }
+
     // 2. Get or create ECDSA key pair
     const keyRecord = await getOrCreateEcdsaKeyPair();
 
@@ -431,7 +487,7 @@ if (fileInputEl) {
       const text = await decodeQrFromImageFile(file);
       await handleQrEnrollment(text);
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message, 'error', 6000);
     }
   });
 }
@@ -470,40 +526,85 @@ async function loadApprovalRequest(requestId, initialData = null) {
 
   const titleEl = document.getElementById('approval-title');
   const accountEl = document.getElementById('approval-account');
+  const subtextEl = document.getElementById('approval-subtext');
   const gridEl = document.getElementById('number-matching-grid');
+  const wordContainerEl = document.getElementById('word-matching-container');
+  const wordInputEl = document.getElementById('approval-word-input');
   const approveBtn = document.getElementById('btn-approve-login');
   const denyBtn = document.getElementById('btn-deny-login');
 
+  if (approveBtn) approveBtn.style.display = '';
+  if (denyBtn) denyBtn.style.display = '';
+
   if (titleEl) titleEl.textContent = 'Approve Login Attempt';
   if (accountEl) accountEl.textContent = reqData.account || 'Your Account';
-  if (approveBtn) approveBtn.disabled = true;
 
-  // Render 3 number buttons
-  const options = reqData.options || [42, 18, 93];
-  gridEl.innerHTML = '';
-  options.forEach((num) => {
-    const btn = document.createElement('button');
-    btn.className = 'number-btn';
-    btn.textContent = num;
-    btn.onclick = () => {
-      document.querySelectorAll('.number-btn').forEach((b) => b.classList.remove('selected'));
-      btn.classList.add('selected');
-      selectedApprovalNumber = num;
-      if (approveBtn) approveBtn.disabled = false;
-    };
-    gridEl.appendChild(btn);
-  });
+  const mode = reqData.mode || 'number_choice';
 
-  if (approveBtn) {
-    approveBtn.onclick = () => respondToLogin(requestId, selectedApprovalNumber, 'approve');
+  if (mode === 'one_click') {
+    if (subtextEl) subtextEl.innerHTML = 'Tap <strong>Approve</strong> below to authenticate your login instantly.';
+    if (gridEl) gridEl.style.display = 'none';
+    if (wordContainerEl) wordContainerEl.style.display = 'none';
+    if (approveBtn) approveBtn.disabled = false;
+
+    if (approveBtn) {
+      approveBtn.onclick = () => respondToLogin(requestId, 0, 'approve', null);
+    }
+  } else if (mode === 'word_input') {
+    if (subtextEl) subtextEl.innerHTML = 'Type the <strong>verification word</strong> displayed on your screen:';
+    if (gridEl) gridEl.style.display = 'none';
+    if (wordContainerEl) {
+      wordContainerEl.style.display = 'block';
+      if (wordInputEl) {
+        wordInputEl.value = '';
+        wordInputEl.focus();
+        wordInputEl.oninput = () => {
+          if (approveBtn) approveBtn.disabled = wordInputEl.value.trim().length < 2;
+        };
+      }
+    }
+    if (approveBtn) {
+      approveBtn.disabled = true;
+      approveBtn.onclick = () => {
+        const word = wordInputEl ? wordInputEl.value.trim().toUpperCase() : '';
+        respondToLogin(requestId, 0, 'approve', word);
+      };
+    }
+  } else {
+    // Default: number_choice
+    if (subtextEl) subtextEl.innerHTML = 'To prevent push fatigue attacks, select the matching <strong>2-digit number</strong> displayed on your login screen:';
+    if (gridEl) gridEl.style.display = 'grid';
+    if (wordContainerEl) wordContainerEl.style.display = 'none';
+    if (approveBtn) approveBtn.disabled = true;
+
+    // Render 3 number buttons
+    const options = reqData.options || [42, 18, 93];
+    gridEl.innerHTML = '';
+    options.forEach((num) => {
+      const btn = document.createElement('button');
+      btn.className = 'number-btn';
+      btn.textContent = num;
+      btn.onclick = () => {
+        document.querySelectorAll('.number-btn').forEach((b) => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedApprovalNumber = num;
+        if (approveBtn) approveBtn.disabled = false;
+      };
+      gridEl.appendChild(btn);
+    });
+
+    if (approveBtn) {
+      approveBtn.onclick = () => respondToLogin(requestId, selectedApprovalNumber, 'approve', null);
+    }
   }
+
   if (denyBtn) {
-    denyBtn.onclick = () => respondToLogin(requestId, 0, 'deny');
+    denyBtn.onclick = () => respondToLogin(requestId, 0, 'deny', null);
   }
 }
 
 // Respond to login approval request with ECDSA signature
-async function respondToLogin(requestId, chosenNumber, decision) {
+async function respondToLogin(requestId, chosenNumber, decision, chosenWord = null) {
   try {
     const keyRecord = await getOrCreateEcdsaKeyPair();
     const timestamp = Date.now();
@@ -512,7 +613,7 @@ async function respondToLogin(requestId, chosenNumber, decision) {
     // { request_id, chosen_number, decision, timestamp }
     const canonicalPayload = JSON.stringify({
       request_id: requestId,
-      chosen_number: Number(chosenNumber),
+      chosen_number: Number(chosenNumber || 0),
       decision,
       timestamp,
     });
@@ -524,8 +625,10 @@ async function respondToLogin(requestId, chosenNumber, decision) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        challengeId: requestId,
         request_id: requestId,
-        chosen_number: Number(chosenNumber),
+        chosen_number: Number(chosenNumber || 0),
+        chosen_word: chosenWord,
         decision,
         timestamp,
         signature,

@@ -51,6 +51,7 @@ export default function DocsPage() {
 
   const [pushEmail, setPushEmail] = useState('demo.user@example.com');
   const [pushIssuer, setPushIssuer] = useState('');
+  const [pushMode, setPushMode] = useState<'number_choice' | 'one_click' | 'word_input'>('number_choice');
   const [pushRes, setPushRes] = useState<LiveResponseState>({ loading: false, status: null, durationMs: null, data: null });
 
   const [pollRequestId, setPollRequestId] = useState('');
@@ -662,6 +663,33 @@ print("QR Code Data URL:", data.get("qrCodeDataUrl"))`,
               </div>
             </div>
 
+            {/* Verification Mode Selector */}
+            <div>
+              <label className="block text-[10px] font-mono text-slate-400 mb-1 uppercase tracking-wider">
+                Verification Challenge Mode
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'number_choice', label: '🛡️ Number Match' },
+                  { id: 'one_click', label: '⚡ 1-Click Approve' },
+                  { id: 'word_input', label: '🔤 Word Entry' },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPushMode(m.id as any)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-semibold border transition-all ${
+                      pushMode === m.id
+                        ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500 shadow-sm'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex items-center justify-between pt-1">
               <div className="text-[11px] text-slate-400">
                 User must be enrolled via QR code with active device to receive push.
@@ -671,7 +699,7 @@ print("QR Code Data URL:", data.get("qrCodeDataUrl"))`,
                   const data = await executeApiCall(
                     '/push/challenge',
                     'POST',
-                    { username: pushEmail.trim(), issuer: pushIssuer.trim() || undefined },
+                    { username: pushEmail.trim(), issuer: pushIssuer.trim() || undefined, mode: pushMode },
                     setPushRes
                   );
                   if (data?.requestId) {

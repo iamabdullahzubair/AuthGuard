@@ -113,7 +113,7 @@ export async function tenantSessionAuth(req, res, next) {
   // Fetch fresh member & tenant state
   const memberRes = await query(
     `SELECT tm.id as member_id, tm.tenant_id, tm.email, tm.role, tm.is_super_admin,
-            t.name as tenant_name, t.slug as tenant_slug, t.status as tenant_status, t.branding, t.tier
+            t.name as tenant_name, t.slug as tenant_slug, t.status as tenant_status, t.verification_mode, t.branding, t.tier
      FROM tenant_members tm
      LEFT JOIN tenants t ON tm.tenant_id = t.id
      WHERE tm.id = $1`,
@@ -139,11 +139,12 @@ export async function tenantSessionAuth(req, res, next) {
         name: row.tenant_name,
         slug: row.tenant_slug,
         tier: row.tier,
+        verification_mode: row.verification_mode || 'number_choice',
         branding: typeof row.branding === 'string' ? JSON.parse(row.branding) : row.branding,
       };
     } else {
       const targetTenantRes = await query(
-        `SELECT id, name, slug, status, tier, branding FROM tenants WHERE id = $1`,
+        `SELECT id, name, slug, status, tier, verification_mode, branding FROM tenants WHERE id = $1`,
         [effectiveTenantId]
       );
       if (targetTenantRes.rows.length > 0) {
@@ -153,6 +154,7 @@ export async function tenantSessionAuth(req, res, next) {
           name: t.name,
           slug: t.slug,
           tier: t.tier,
+          verification_mode: t.verification_mode || 'number_choice',
           branding: typeof t.branding === 'string' ? JSON.parse(t.branding) : t.branding,
         };
       }

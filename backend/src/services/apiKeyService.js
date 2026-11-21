@@ -64,7 +64,7 @@ export async function verifyApiKey(rawKey) {
   const res = await query(
     `SELECT ak.id as key_id, ak.name as key_name, ak.environment, ak.is_active,
             t.id as tenant_id, t.name as tenant_name, t.slug as tenant_slug,
-            t.status as tenant_status, t.tier as tenant_tier, t.branding
+            t.status as tenant_status, t.tier as tenant_tier, t.verification_mode, t.branding
      FROM api_keys ak
      JOIN tenants t ON ak.tenant_id = t.id
      WHERE ak.key_hash = $1 AND ak.is_active = true`,
@@ -92,6 +92,7 @@ export async function verifyApiKey(rawKey) {
       name: row.tenant_name,
       slug: row.tenant_slug,
       tier: row.tenant_tier,
+      verification_mode: row.verification_mode || 'number_choice',
       branding: typeof row.branding === 'string' ? JSON.parse(row.branding) : row.branding,
     },
   };

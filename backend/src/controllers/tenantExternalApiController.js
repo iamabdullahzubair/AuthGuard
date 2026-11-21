@@ -131,13 +131,28 @@ export const tenantExternalApiController = {
         });
       }
 
-      // 3. Generate challenge number and decoys
-      const challengeNumber = crypto.randomInt(10, 100);
-      const decoys = new Set([challengeNumber]);
-      while (decoys.size < 3) {
-        decoys.add(crypto.randomInt(10, 100));
+      // 3. Resolve Verification Mode (Tenant Setting or API Override)
+      const validModes = ['number_choice', 'one_click', 'word_input'];
+      const requestedMode = req.body.mode;
+      const mode = (requestedMode && validModes.includes(requestedMode))
+        ? requestedMode
+        : (req.tenant.verification_mode || 'number_choice');
+
+      const WORDLIST = ['HAWK', 'LION', 'BLUE', 'WAVE', 'APEX', 'NEON', 'RUBY', 'ECHO', 'STAR', 'FIRE', 'BOLD', 'SWIFT', 'NOVA', 'LUNA', 'JADE', 'PEAK'];
+      let challengeNumber = null;
+      let challengeWord = null;
+      let shuffledOptions = [];
+
+      if (mode === 'number_choice') {
+        challengeNumber = crypto.randomInt(10, 100);
+        const decoys = new Set([challengeNumber]);
+        while (decoys.size < 3) {
+          decoys.add(crypto.randomInt(10, 100));
+        }
+        shuffledOptions = Array.from(decoys).sort(() => Math.random() - 0.5);
+      } else if (mode === 'word_input') {
+        challengeWord = WORDLIST[crypto.randomInt(0, WORDLIST.length)];
       }
-      const shuffledOptions = Array.from(decoys).sort(() => Math.random() - 0.5);
 
       const requestId = crypto.randomUUID();
       const nonce = crypto.randomBytes(16).toString('hex');
@@ -148,7 +163,9 @@ export const tenantExternalApiController = {
         id: requestId,
         tenantId,
         endUserId: user.id,
+        mode,
         challengeNumber,
+        challengeWord,
         decoys: shuffledOptions,
         status: 'pending',
         nonce,
@@ -159,13 +176,26 @@ export const tenantExternalApiController = {
       }, 120);
 
       // 4. Send Web Push
+      let pushBody = message;
+      if (!pushBody) {
+        if (mode === 'one_click') {
+          pushBody = 'Login attempted. Tap to review & approve.';
+        } else if (mode === 'word_input') {
+          pushBody = `Login attempted. Enter verification word '${challengeWord}' to approve.`;
+        } else {
+          pushBody = `Login attempted. Confirm number ${challengeNumber} on your device to approve.`;
+        }
+      }
+
       const pushPayload = {
         title: title || `${resolvedIssuer} - Login Approval`,
-        body: message || `Login attempted. Confirm number ${challengeNumber} on your device to approve.`,
+        body: pushBody,
         icon: '/pwa/icons/icon-192.png',
         data: {
           type: 'LOGIN_APPROVAL',
           requestId,
+          mode,
+          challengeNumber,
           options: shuffledOptions,
           expiresAt: expiresAt.toISOString(),
           url: `/pwa/?request_id=${requestId}`,
@@ -181,7 +211,9 @@ export const tenantExternalApiController = {
         req,
         metadata: {
           requestId,
+          mode,
           challengeNumber,
+          challengeWord,
           email: normalizedEmail,
           devicesSent: pushResult.sent,
           issuer: resolvedIssuer,
@@ -192,15 +224,26 @@ export const tenantExternalApiController = {
       const tenantParam = req.params.tenantId || tenantId;
       const statusUrl = `/api/tenant/${tenantParam}/push/status/${requestId}`;
 
+      let clientMessage = '';
+      if (mode === 'one_click') {
+        clientMessage = 'Push notification sent! Tap Approve on the Authenticator app.';
+      } else if (mode === 'word_input') {
+        clientMessage = `Push notification sent! Present word '${challengeWord}' to the user to type on their Authenticator app.`;
+      } else {
+        clientMessage = `Push notification sent! Present number ${challengeNumber} to the user to approve on their Authenticator app.`;
+      }
+
       return res.status(200).json({
         success: true,
         challengeId: requestId,
         requestId,
-        challengeNumber,
+        mode,
+        ...(mode === 'number_choice' ? { challengeNumber } : {}),
+        ...(mode === 'word_input' ? { challengeWord } : {}),
         devicesNotified: pushResult.sent,
         expiresAt: expiresAt.toISOString(),
         statusUrl,
-        message: `Push notification sent! Present number ${challengeNumber} to the user to approve on their Authenticator app.`,
+        message: clientMessage,
       });
     } catch (err) {
       console.error('[External API Push Challenge Error]:', err);

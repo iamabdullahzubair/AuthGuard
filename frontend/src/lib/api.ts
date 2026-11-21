@@ -12,6 +12,7 @@ export interface Tenant {
   name: string;
   slug: string;
   tier: string;
+  verification_mode?: 'number_choice' | 'one_click' | 'word_input';
   branding?: {
     issuerName?: string;
     primaryColor?: string;

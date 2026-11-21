@@ -37,6 +37,7 @@ export const initDb = async () => {
           slug VARCHAR(64) UNIQUE NOT NULL,
           status VARCHAR(32) NOT NULL DEFAULT 'active',
           tier VARCHAR(32) NOT NULL DEFAULT 'enterprise',
+          verification_mode VARCHAR(32) NOT NULL DEFAULT 'number_choice',
           branding JSONB DEFAULT '{"issuerName": "AuthGuard", "primaryColor": "#3b82f6"}'::jsonb,
           created_at TIMESTAMPTZ DEFAULT NOW(),
           updated_at TIMESTAMPTZ DEFAULT NOW()

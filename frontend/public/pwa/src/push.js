@@ -26,8 +26,16 @@ export async function registerServiceWorker() {
  * Get current active Service Worker registration
  */
 export async function getSwRegistration() {
-  if (swRegistration) return swRegistration;
-  return await registerServiceWorker();
+  if (!('serviceWorker' in navigator)) {
+    throw new Error('Service Workers are not supported in this browser.');
+  }
+  if (!swRegistration) {
+    swRegistration = await navigator.serviceWorker.register('/pwa/sw.js', {
+      scope: '/pwa/',
+    });
+  }
+  // Guarantee service worker is ready before PushManager operations
+  return await navigator.serviceWorker.ready;
 }
 
 /**
@@ -43,7 +51,7 @@ export async function requestNotificationPermission() {
   }
 
   if (Notification.permission === 'denied') {
-    throw new Error('Notification permission was blocked in browser settings. Please enable them to receive login approvals.');
+    throw new Error('Notifications are blocked! Click the 🔒/🎚️ icon in your browser address bar and set Notifications to Allow.');
   }
 
   const permission = await Notification.requestPermission();
@@ -62,19 +70,13 @@ export async function subscribeToPush(serverBaseUrl = '') {
   await requestNotificationPermission();
   const reg = await getSwRegistration();
 
-  // Wait until service worker is active
-  if (!reg.active) {
-    await new Promise((resolve) => {
-      const check = () => {
-        if (reg.active) resolve();
-        else setTimeout(check, 50);
-      };
-      check();
-    });
-  }
-
   // Check if existing subscription exists
-  let subscription = await reg.pushManager.getSubscription();
+  let subscription = null;
+  try {
+    subscription = await reg.pushManager.getSubscription();
+  } catch (err) {
+    console.warn('[Push] Error checking existing subscription:', err);
+  }
 
   if (!subscription) {
     // Fetch VAPID public key from backend
@@ -85,15 +87,36 @@ export async function subscribeToPush(serverBaseUrl = '') {
     }
     const data = await res.json();
     const vapidPublicKey = data.publicKey;
+    if (!vapidPublicKey) {
+      throw new Error('VAPID public key missing from server response');
+    }
 
     const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
 
-    subscription = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: convertedVapidKey,
-    });
+    try {
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: convertedVapidKey,
+      });
+    } catch (err) {
+      console.warn('[Push] Browser PushManager subscribe failed (FCM unavailable/blocked on this browser/network):', err);
+      // Graceful fallback for local development / laptop testing / FCM-blocked environments
+      const fallbackId = (typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : Math.random().toString(36).substring(2);
+
+      return {
+        endpoint: `local-sync://${window.location.host}/${fallbackId}`,
+        keys: {
+          auth: 'local-auth-' + fallbackId.slice(0, 8),
+          p256dh: 'local-p256dh-' + fallbackId.slice(0, 8),
+        },
+        localFallback: true,
+        fallbackReason: err.message,
+      };
+    }
   }
 
-  return subscription.toJSON();
+  return subscription.toJSON ? subscription.toJSON() : subscription;
 }
 
