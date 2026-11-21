@@ -22,6 +22,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import ConfirmModal from '@/components/ConfirmModal';
 
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -47,6 +48,14 @@ export default function UsersPage() {
   const [deletingUser, setDeletingUser] = useState<any | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Reset 2FA Confirmation State
+  const [resetConfirmState, setResetConfirmState] = useState<{
+    isOpen: boolean;
+    userId: string;
+    email: string;
+  } | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+
   const pollIntervalRef = useRef<any>(null);
 
   const fetchUsers = async () => {
@@ -69,8 +78,9 @@ export default function UsersPage() {
     if (showModal && enrollResult && !autoConfirmed) {
       pollIntervalRef.current = setInterval(async () => {
         try {
+          const target = enrollResult.username || enrollResult.email;
           const status = await apiClient(
-            `/api/tenant/users/enroll-status?email=${encodeURIComponent(enrollResult.email)}`
+            `/api/tenant/users/enroll-status?username=${encodeURIComponent(target)}`
           );
           if (status.enrolled) {
             setAutoConfirmed(true);
@@ -198,26 +208,34 @@ export default function UsersPage() {
     }
   };
 
-  const handleReset2FA = async (userId: string, email: string) => {
-    if (!confirm(`Reset 2FA for ${email}? This will revoke all active devices and allow a fresh enrollment.`)) {
-      return;
-    }
+  const handleReset2FA = (userId: string, email: string) => {
+    setResetConfirmState({ isOpen: true, userId, email });
+  };
+
+  const handleExecuteReset2FA = async () => {
+    if (!resetConfirmState) return;
+    setIsResetting(true);
+    const { userId, email } = resetConfirmState;
 
     try {
       await apiClient(`/api/tenant/users/${userId}/reset-2fa`, {
         method: 'POST',
       });
+      setResetConfirmState(null);
       fetchUsers();
       // Immediately open enrollment modal with fresh QR code
       handleEnrollUser(undefined, email);
     } catch (err: any) {
       alert(err.message || 'Failed to reset 2FA');
+    } finally {
+      setIsResetting(false);
     }
   };
 
-  const filtered = users.filter((u) =>
-    u.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filtered = users.filter((u) => {
+    const val = (u.username || u.email || '').toLowerCase();
+    return val.includes(searchTerm.toLowerCase());
+  });
 
   return (
     <div className="space-y-6">
@@ -237,7 +255,7 @@ export default function UsersPage() {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by email..."
+              placeholder="Search by username or email..."
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
             />
           </div>
@@ -294,6 +312,7 @@ export default function UsersPage() {
         ) : (
           <div className="divide-y divide-slate-800">
             {filtered.map((u) => {
+              const userIdentifier = u.username || u.email;
               const deviceCount = parseInt(u.active_devices_count || '0', 10);
               const isSetupComplete = u.two_factor_enabled && deviceCount > 0;
 
@@ -304,7 +323,7 @@ export default function UsersPage() {
                 >
                   <div className="space-y-1">
                     <div className="flex items-center gap-2.5">
-                      <span className="font-semibold text-white text-sm">{u.email}</span>
+                      <span className="font-semibold text-white text-sm">{userIdentifier}</span>
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 ${
                           isSetupComplete
@@ -340,16 +359,16 @@ export default function UsersPage() {
 
                   {/* Actions Bar */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {pushStatus[u.email] && (
+                    {pushStatus[userIdentifier] && (
                       <span className="text-xs font-mono font-medium text-blue-400 bg-blue-950/60 border border-blue-800/80 px-2.5 py-1 rounded-lg">
-                        {pushStatus[u.email]}
+                        {pushStatus[userIdentifier]}
                       </span>
                     )}
 
                     {/* Resume Setup / Scan QR Button if Setup Incomplete */}
                     {!isSetupComplete && (
                       <button
-                        onClick={() => handleEnrollUser(undefined, u.email)}
+                        onClick={() => handleEnrollUser(undefined, userIdentifier)}
                         className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-medium py-1.5 px-3 rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
                         title="Generate fresh QR code to complete 2FA setup"
                       >
@@ -360,8 +379,8 @@ export default function UsersPage() {
 
                     {/* Test Push Challenge Button */}
                     <button
-                      onClick={() => handleTriggerPush(u.email)}
-                      disabled={triggeringUser === u.email || deviceCount === 0}
+                      onClick={() => handleTriggerPush(userIdentifier)}
+                      disabled={triggeringUser === userIdentifier || deviceCount === 0}
                       title={
                         deviceCount === 0
                           ? 'User has no active mobile devices enrolled'
@@ -375,7 +394,7 @@ export default function UsersPage() {
 
                     {/* Reset 2FA Button */}
                     <button
-                      onClick={() => handleReset2FA(u.id, u.email)}
+                      onClick={() => handleReset2FA(u.id, userIdentifier)}
                       title="Reset 2FA and remove paired devices"
                       className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-xl text-slate-400 hover:text-amber-400 transition-colors"
                     >
@@ -386,9 +405,9 @@ export default function UsersPage() {
                     <button
                       onClick={() => {
                         setEditingUser(u);
-                        setEditEmail(u.email);
+                        setEditEmail(userIdentifier);
                       }}
-                      title="Edit User Email"
+                      title="Edit Username / Identifier"
                       className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-xl text-slate-400 hover:text-white transition-colors"
                     >
                       <Edit2 className="h-3.5 w-3.5" />
@@ -440,7 +459,7 @@ export default function UsersPage() {
                     <CheckCircle2 className="h-10 w-10 text-emerald-400 mx-auto" />
                     <div className="text-sm font-bold text-white">🎉 Device Paired & 2FA Activated!</div>
                     <p className="text-xs text-emerald-300">
-                      User <strong>{enrollResult.email}</strong> successfully scanned the QR code. Push authentication & TOTP are now active.
+                      User <strong>{enrollResult.username || enrollResult.email}</strong> successfully scanned the QR code. Push authentication & TOTP are now active.
                     </p>
                     <button
                       onClick={() => {
@@ -468,7 +487,7 @@ export default function UsersPage() {
                           className="h-44 w-44 object-contain"
                         />
                       </div>
-                      <div className="text-xs text-slate-300 font-semibold">{enrollResult.email}</div>
+                      <div className="text-xs text-slate-300 font-semibold">{enrollResult.username || enrollResult.email}</div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
                         Issuer: <strong>{enrollResult.issuer}</strong>
                       </div>
@@ -513,18 +532,18 @@ export default function UsersPage() {
               <form onSubmit={handleEnrollUser} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                    User Email Address
+                    Username / Identifier
                   </label>
                   <input
-                    type="email"
+                    type="text"
                     value={enrollEmail}
                     onChange={(e) => setEnrollEmail(e.target.value)}
-                    placeholder="employee@yourcompany.com"
+                    placeholder="e.g. john.doe, emp_101, or alex@company.com"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
-                    A single-use enrollment token will be created and bound to this email.
+                    A single-use enrollment token will be created and bound to this username/identifier.
                   </p>
                 </div>
 
@@ -567,18 +586,19 @@ export default function UsersPage() {
               <span>Edit User Profile</span>
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              Update email address or manage 2FA configuration.
+              Update username/identifier or manage 2FA configuration.
             </p>
 
             <form onSubmit={handleSaveEdit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                  Email Address
+                  Username / Identifier
                 </label>
                 <input
-                  type="email"
+                  type="text"
                   value={editEmail}
                   onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="e.g. john.doe or alex@company.com"
                   required
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500"
                 />
@@ -664,6 +684,24 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+      {/* Confirm Reset 2FA Modal */}
+      <ConfirmModal
+        isOpen={Boolean(resetConfirmState?.isOpen)}
+        onClose={() => setResetConfirmState(null)}
+        onConfirm={handleExecuteReset2FA}
+        isLoading={isResetting}
+        title="Reset 2FA Enrollment"
+        variant="warning"
+        confirmText="Yes, Reset 2FA"
+        description={
+          <div>
+            Are you sure you want to reset 2FA for <strong className="text-white">{resetConfirmState?.email}</strong>?
+            <p className="mt-2 text-slate-400">
+              This will revoke all active mobile authenticator devices and cryptographic credentials for this user, and immediately launch a fresh QR code enrollment prompt.
+            </p>
+          </div>
+        }
+      />
     </div>
   );
 }

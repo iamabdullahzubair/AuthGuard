@@ -415,29 +415,49 @@ export const tenantPortalController = {
    */
   async listUsers(req, res) {
     const tenantId = req.tenant?.id || 'tenant_system_default';
-    const result = await query(
-      `SELECT u.id, u.email, u.two_factor_enabled, u.created_at,
-              COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
-       FROM end_users u
-       LEFT JOIN end_user_devices d ON u.id = d.end_user_id
-       WHERE u.tenant_id = $1
-       GROUP BY u.id
-       ORDER BY u.created_at DESC LIMIT 100`,
-      [tenantId]
-    );
+    const q = req.query.q ? String(req.query.q).trim().toLowerCase() : '';
 
-    return res.json({ users: result.rows });
+    let sql = `
+      SELECT u.id, u.email, u.two_factor_enabled, u.created_at,
+             COUNT(d.id) FILTER (WHERE d.status = 'active') as active_devices_count
+      FROM end_users u
+      LEFT JOIN end_user_devices d ON u.id = d.end_user_id
+      WHERE u.tenant_id = $1
+    `;
+    const params = [tenantId];
+
+    if (q) {
+      params.push(`%${q}%`);
+      sql += ` AND LOWER(u.email) LIKE $2 `;
+    }
+
+    sql += `
+      GROUP BY u.id
+      ORDER BY u.created_at DESC LIMIT 100
+    `;
+
+    const result = await query(sql, params);
+    const users = result.rows.map(u => ({
+      id: u.id,
+      username: u.email,
+      two_factor_enabled: u.two_factor_enabled,
+      active_devices_count: u.active_devices_count,
+      created_at: u.created_at,
+    }));
+
+    return res.json({ users });
   },
 
   /**
    * GET /api/tenant/users/enroll-status
    */
   async getUserEnrollStatus(req, res) {
-    const { email } = req.query;
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({ error: 'Email parameter required' });
+    const rawId = req.query.username || req.query.email || req.query.identifier;
+    if (!rawId || typeof rawId !== 'string') {
+      return res.status(400).json({ error: 'Username or identifier parameter required' });
     }
 
+    const normalizedId = rawId.toLowerCase().trim();
     const tenantId = req.tenant?.id || 'tenant_system_default';
     const check = await query(
       `SELECT u.id, u.email, u.two_factor_enabled,
@@ -446,7 +466,7 @@ export const tenantPortalController = {
        LEFT JOIN end_user_devices d ON u.id = d.end_user_id
        WHERE u.tenant_id = $1 AND u.email = $2
        GROUP BY u.id`,
-      [tenantId, email.toLowerCase().trim()]
+      [tenantId, normalizedId]
     );
 
     if (check.rows.length === 0) {
@@ -462,6 +482,7 @@ export const tenantPortalController = {
       twoFactorEnabled: Boolean(row.two_factor_enabled),
       activeDevices,
       userId: row.id,
+      username: normalizedId,
     });
   },
 
@@ -469,15 +490,21 @@ export const tenantPortalController = {
    * PATCH /api/tenant/users/:id
    */
   async updateUser(req, res) {
-    const { email, two_factor_enabled } = req.body;
+    const targetUsername = typeof req.body.username === 'string'
+      ? req.body.username
+      : (typeof req.body.email === 'string'
+        ? req.body.email
+        : (typeof req.body.identifier === 'string' ? req.body.identifier : null));
+
+    const { two_factor_enabled } = req.body;
     const tenantId = req.tenant?.id || 'tenant_system_default';
     const updates = [];
     const values = [req.params.id, tenantId];
     let idx = 3;
 
-    if (typeof email === 'string' && email.includes('@')) {
+    if (targetUsername && targetUsername.trim().length >= 2) {
       updates.push(`email = $${idx++}`);
-      values.push(email.toLowerCase().trim());
+      values.push(targetUsername.toLowerCase().trim());
     }
     if (typeof two_factor_enabled === 'boolean') {
       updates.push(`two_factor_enabled = $${idx++}`);
@@ -496,7 +523,15 @@ export const tenantPortalController = {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    return res.json({ success: true, user: result.rows[0] });
+    const row = result.rows[0];
+    const user = {
+      id: row.id,
+      username: row.email,
+      two_factor_enabled: row.two_factor_enabled,
+      updated_at: row.updated_at,
+    };
+
+    return res.json({ success: true, user });
   },
 
   /**
@@ -555,12 +590,12 @@ export const tenantPortalController = {
    * Dashboard admin generates 2FA enrollment QR code for an end-user
    */
   async enrollUser(req, res) {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({ error: 'Valid user email required' });
+    const rawId = req.body.username || req.body.email || req.body.identifier;
+    if (!rawId || typeof rawId !== 'string' || rawId.trim().length < 2) {
+      return res.status(400).json({ error: 'Valid username or identifier required (min 2 characters)' });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = rawId.toLowerCase().trim();
     const tenantId = req.tenant?.id || 'tenant_system_default';
     const issuer = req.tenant?.branding?.issuerName || req.tenant?.name || 'AuthGuard';
 
@@ -649,7 +684,7 @@ export const tenantPortalController = {
       return res.json({
         success: true,
         userId: endUserId,
-        email: normalizedEmail,
+        username: normalizedEmail,
         enrollToken,
         totpSecret: secret,
         qrCodeDataUrl: qrDataUrl,

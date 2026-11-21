@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Key, Plus, Trash2, Copy, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import ConfirmModal from '@/components/ConfirmModal';
 
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<any[]>([]);
@@ -13,13 +14,24 @@ export default function ApiKeysPage() {
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+
+  // Revoke Modal State
+  const [revokeModalState, setRevokeModalState] = useState<{
+    isOpen: boolean;
+    keyId: string;
+    keyPrefix: string;
+    name: string;
+  } | null>(null);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   const fetchKeys = async () => {
     try {
       const res = await apiClient('/api/tenant/api-keys');
       setKeys(res.keys || []);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setErrorBanner(err.message || 'Failed to fetch API keys');
     } finally {
       setLoading(false);
     }
@@ -32,6 +44,7 @@ export default function ApiKeysPage() {
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     setGenerating(true);
+    setErrorBanner(null);
 
     try {
       const res = await apiClient('/api/tenant/api-keys', {
@@ -44,22 +57,33 @@ export default function ApiKeysPage() {
       setShowModal(false);
       fetchKeys();
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to generate key');
     } finally {
       setGenerating(false);
     }
   };
 
-  const handleRevoke = async (keyId: string) => {
-    if (!confirm('Are you sure you want to revoke this API key? External applications using it will be blocked.')) {
-      return;
-    }
+  const openRevokeModal = (keyId: string, keyPrefix: string, name: string) => {
+    setRevokeModalState({
+      isOpen: true,
+      keyId,
+      keyPrefix,
+      name,
+    });
+  };
+
+  const handleExecuteRevoke = async () => {
+    if (!revokeModalState) return;
+    setIsRevoking(true);
 
     try {
-      await apiClient(`/api/tenant/api-keys/${keyId}`, { method: 'DELETE' });
+      await apiClient(`/api/tenant/api-keys/${revokeModalState.keyId}`, { method: 'DELETE' });
+      setRevokeModalState(null);
       fetchKeys();
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to revoke key');
+    } finally {
+      setIsRevoking(false);
     }
   };
 
@@ -79,13 +103,31 @@ export default function ApiKeysPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={() => {
+            setErrorBanner(null);
+            setShowModal(true);
+          }}
           className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20"
         >
           <Plus className="h-4 w-4" />
           <span>Create New API Key</span>
         </button>
       </div>
+
+      {errorBanner && (
+        <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+            <span>{errorBanner}</span>
+          </div>
+          <button
+            onClick={() => setErrorBanner(null)}
+            className="text-red-400 hover:text-red-200 text-xs font-semibold px-2 py-0.5 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* One-time Key Revealed Alert */}
       {revealedKey && (
@@ -99,34 +141,35 @@ export default function ApiKeysPage() {
               <p className="text-xs text-amber-200/80 mt-0.5">
                 For security reasons, this raw key is only shown once. You will not be able to view it again.
               </p>
+
               <div className="mt-3 flex items-center gap-2">
-                <code className="bg-slate-950 px-3 py-2 rounded-xl text-xs font-mono text-emerald-400 border border-slate-800 flex-1 truncate">
-                  {revealedKey}
-                </code>
+                <input
+                  type="text"
+                  readOnly
+                  value={revealedKey}
+                  className="bg-slate-950 border border-amber-800 rounded-xl px-3 py-2 text-xs font-mono text-amber-200 flex-1 select-all"
+                />
                 <button
                   onClick={() => copyToClipboard(revealedKey)}
-                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  className="bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 >
-                  {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span>{copied ? 'Copied' : 'Copy Key'}</span>
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
               </div>
             </div>
-            <button
-              onClick={() => setRevealedKey(null)}
-              className="text-amber-400/60 hover:text-amber-400 text-xs px-2 py-1"
-            >
-              Dismiss
-            </button>
           </div>
         </div>
       )}
 
       {/* Keys Table */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-          <Key className="h-4 w-4 text-blue-400" />
-          <span>Active Credentials</span>
+        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Key className="h-4 w-4 text-blue-400" />
+            <span>Active Credentials</span>
+          </div>
+          <span>Total: {keys.length}</span>
         </div>
 
         {loading ? (
@@ -135,12 +178,12 @@ export default function ApiKeysPage() {
           </div>
         ) : keys.length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-sm">
-            No API keys found. Generate a key to begin integrating with your backend.
+            No API keys issued yet. Click <strong className="text-slate-300">Create New API Key</strong> to generate one.
           </div>
         ) : (
           <div className="divide-y divide-slate-800">
             {keys.map((k) => (
-              <div key={k.id} className="p-4 flex items-center justify-between text-xs hover:bg-slate-850/50 transition-colors">
+              <div key={k.id} className="p-4 flex items-center justify-between hover:bg-slate-850/50">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-white text-sm">{k.name}</span>
@@ -160,7 +203,9 @@ export default function ApiKeysPage() {
                     )}
                   </div>
                   <div className="text-slate-400 font-mono text-[11px] flex items-center gap-3">
-                    <span>Prefix: <span className="text-slate-300">{k.key_prefix}...</span></span>
+                    <span>
+                      Prefix: <span className="text-slate-300">{k.key_prefix}...</span>
+                    </span>
                     <span>Created: {new Date(k.created_at).toLocaleDateString()}</span>
                     <span>Last used: {k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : 'Never'}</span>
                   </div>
@@ -169,7 +214,7 @@ export default function ApiKeysPage() {
                 <div>
                   {k.is_active ? (
                     <button
-                      onClick={() => handleRevoke(k.id)}
+                      onClick={() => openRevokeModal(k.id, k.key_prefix, k.name)}
                       className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
                       title="Revoke Key"
                     >
@@ -245,7 +290,7 @@ export default function ApiKeysPage() {
                 <button
                   type="submit"
                   disabled={generating}
-                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-xl text-xs transition-colors flex items-center gap-1.5"
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-xl text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-blue-600/20"
                 >
                   {generating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>Generate Key</span>
@@ -255,6 +300,26 @@ export default function ApiKeysPage() {
           </div>
         </div>
       )}
+
+      {/* Revoke Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(revokeModalState?.isOpen)}
+        onClose={() => setRevokeModalState(null)}
+        onConfirm={handleExecuteRevoke}
+        isLoading={isRevoking}
+        title="Revoke API Key"
+        variant="danger"
+        confirmText="Yes, Revoke Key"
+        description={
+          <div>
+            Are you sure you want to revoke <strong className="text-white">{revokeModalState?.name}</strong>{' '}
+            (<code className="font-mono text-slate-300">{revokeModalState?.keyPrefix}...</code>)?
+            <p className="mt-2 text-slate-400">
+              External backend systems using this key will immediately receive HTTP 401 Unauthorized errors. This action cannot be undone.
+            </p>
+          </div>
+        }
+      />
     </div>
   );
 }

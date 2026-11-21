@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Users,
   Smartphone,
@@ -9,8 +9,21 @@ import {
   Loader2,
   Clock,
   TrendingUp,
+  Search,
+  ChevronDown,
+  ShieldCheck,
+  AlertCircle,
+  Check,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+
+interface TenantUser {
+  id: string;
+  username?: string;
+  email?: string;
+  two_factor_enabled: boolean;
+  active_devices_count: number;
+}
 
 export default function TenantOverviewPage() {
   const [stats, setStats] = useState<any>(null);
@@ -18,9 +31,16 @@ export default function TenantOverviewPage() {
 
   // Push Simulator state
   const [testEmail, setTestEmail] = useState('');
+  const [selectedUser, setSelectedUser] = useState<TenantUser | null>(null);
+  const [suggestions, setSuggestions] = useState<TenantUser[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
+
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const fetchStats = async () => {
     try {
@@ -37,6 +57,41 @@ export default function TenantOverviewPage() {
     fetchStats();
   }, []);
 
+  // Debounced search for tenant users
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const queryParam = testEmail.trim() ? `?q=${encodeURIComponent(testEmail.trim())}` : '';
+        const res = await apiClient(`/api/tenant/users${queryParam}`);
+        setSuggestions(res.users || []);
+      } catch (err) {
+        console.error('Failed to search tenant users:', err);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [testEmail]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const handleSelectUser = (user: TenantUser) => {
+    setTestEmail(user.username || user.email || '');
+    setSelectedUser(user);
+    setShowDropdown(false);
+  };
+
   const handleTestPush = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!testEmail) return;
@@ -48,7 +103,7 @@ export default function TenantOverviewPage() {
     try {
       const res = await apiClient('/api/tenant/test-push', {
         method: 'POST',
-        body: JSON.stringify({ email: testEmail }),
+        body: JSON.stringify({ username: testEmail }),
       });
 
       setTestResult(res);
@@ -70,7 +125,9 @@ export default function TenantOverviewPage() {
             clearInterval(timer);
             setTestStatus('⏱️ Push Challenge Expired.');
           }
-        } catch {}
+        } catch {
+          // ignore transient polling errors
+        }
       }, 1500);
     } catch (err: any) {
       setTestStatus(`Error: ${err.message}`);
@@ -98,40 +155,50 @@ export default function TenantOverviewPage() {
 
       {/* Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">Enrolled Users</span>
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Enrolled End Users</span>
             <Users className="h-4 w-4 text-blue-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-3">{stats?.totalUsers || 0}</div>
-          <div className="text-[11px] text-slate-500 mt-1">2FA-activated accounts</div>
+          <div className="mt-3 text-2xl font-bold text-white tracking-tight">
+            {stats?.totalUsers || 0}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Registered in this organization</div>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">Active Devices</span>
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Active Paired Devices</span>
             <Smartphone className="h-4 w-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-3">{stats?.activeDevices || 0}</div>
-          <div className="text-[11px] text-slate-500 mt-1">Registered PWA / Mobile keys</div>
-        </div>
-
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">Push Challenges</span>
-            <TrendingUp className="h-4 w-4 text-amber-400" />
+          <div className="mt-3 text-2xl font-bold text-white tracking-tight">
+            {stats?.activeDevices || 0}
           </div>
-          <div className="text-2xl font-bold text-white mt-3">{stats?.totalChallenges || 0}</div>
-          <div className="text-[11px] text-slate-500 mt-1">{stats?.approvedChallenges || 0} approved</div>
+          <div className="mt-1 text-[11px] text-slate-500">Hardware & PWA keys online</div>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">Verification Rate</span>
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>2FA Push Challenges</span>
             <CheckCircle2 className="h-4 w-4 text-indigo-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-3">{stats?.verificationRate || 100}%</div>
-          <div className="text-[11px] text-slate-500 mt-1">Phishing-resistant approval</div>
+          <div className="mt-3 text-2xl font-bold text-white tracking-tight">
+            {stats?.totalChallenges || 0}
+          </div>
+          <div className="mt-1 text-[11px] text-emerald-400 font-medium">
+            {stats?.approvedChallenges || 0} Approved
+          </div>
+        </div>
+
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Verification Rate</span>
+            <TrendingUp className="h-4 w-4 text-amber-400" />
+          </div>
+          <div className="mt-3 text-2xl font-bold text-white tracking-tight">
+            {stats?.verificationRate || 100}%
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Approval success ratio</div>
         </div>
       </div>
 
@@ -149,21 +216,110 @@ export default function TenantOverviewPage() {
             </p>
 
             <form onSubmit={handleTestPush} className="space-y-3">
-              <div>
-                <input
-                  type="email"
-                  value={testEmail}
-                  onChange={(e) => setTestEmail(e.target.value)}
-                  placeholder="enrolled-user@company.com"
-                  required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                />
+              {/* Debounced Search Input with Tenant-Scoped Dropdown */}
+              <div className="relative" ref={searchContainerRef}>
+                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                  Target Username / Identifier (Scoped to this Tenant)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={testEmail}
+                    onFocus={() => setShowDropdown(true)}
+                    onChange={(e) => {
+                      setTestEmail(e.target.value);
+                      setSelectedUser(null);
+                      setShowDropdown(true);
+                    }}
+                    placeholder="Search enrolled user by username, identifier or email..."
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-3.5 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
+                  />
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">
+                    {searchLoading ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                    ) : (
+                      <Search className="h-3.5 w-3.5" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Dropdown with filtered users strictly belonging to this tenant */}
+                {showDropdown && (
+                  <div className="absolute top-full left-0 right-0 mt-1.5 z-30 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-800/80 animate-in fade-in duration-100">
+                    <div className="p-2 bg-slate-950/70 border-b border-slate-800 text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                      <span>Matching Workspace Users</span>
+                      <span>Total: {suggestions.length}</span>
+                    </div>
+
+                    {suggestions.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-500">
+                        {testEmail.trim()
+                          ? 'No matching users found in this workspace'
+                          : 'No enrolled users found in this workspace'}
+                      </div>
+                    ) : (
+                      suggestions.map((u) => {
+                        const userIdentifier = u.username || u.email || '';
+                        const hasActiveDevice = Number(u.active_devices_count) > 0;
+                        const isSelected = testEmail.toLowerCase() === userIdentifier.toLowerCase();
+
+                        return (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => handleSelectUser(u)}
+                            className={`w-full p-2.5 text-left text-xs transition-colors flex items-center justify-between gap-2 hover:bg-slate-800/80 ${
+                              isSelected ? 'bg-blue-950/30 text-blue-300' : 'text-slate-200'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold truncate">{userIdentifier}</div>
+                              <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                                {u.two_factor_enabled ? (
+                                  <span className="text-emerald-400 flex items-center gap-0.5">
+                                    <ShieldCheck className="h-3 w-3" />
+                                    <span>2FA Active</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500">2FA Pending</span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="shrink-0">
+                              <span
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                                  hasActiveDevice
+                                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                                    : 'bg-amber-950/80 text-amber-300 border-amber-800'
+                                }`}
+                              >
+                                {hasActiveDevice
+                                  ? `${u.active_devices_count} Device`
+                                  : 'No Device'}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                {/* Device Status Hint */}
+                {selectedUser && selectedUser.active_devices_count === 0 && (
+                  <div className="mt-1.5 p-2 bg-amber-950/30 border border-amber-800/60 rounded-lg flex items-center gap-1.5 text-[11px] text-amber-300">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                    <span>User has no active mobile devices. Push may fail until enrolled.</span>
+                  </div>
+                )}
               </div>
 
               <button
                 type="submit"
                 disabled={testLoading}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50 shadow-md shadow-emerald-600/20"
               >
                 {testLoading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

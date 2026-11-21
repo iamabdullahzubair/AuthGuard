@@ -16,6 +16,9 @@ import {
   ChevronDown,
   Radio,
   RefreshCw,
+  AlertCircle,
+  FileCode,
+  ArrowRight,
 } from 'lucide-react';
 
 interface LogEntry {
@@ -429,7 +432,13 @@ export default function SuperAdminLogsPage() {
               return (
                 <div
                   key={logKey}
-                  className="group border border-transparent hover:border-slate-800 hover:bg-slate-900/50 rounded p-1.5 transition-colors"
+                  className={`group border rounded-lg p-2 transition-colors ${
+                    isExpanded
+                      ? 'border-slate-700 bg-slate-900/90 shadow-lg'
+                      : log.metadata?.errorReason || safeLevel === 'ERROR'
+                      ? 'border-rose-950/60 bg-rose-950/10 hover:border-rose-800 hover:bg-slate-900/60'
+                      : 'border-transparent hover:border-slate-800 hover:bg-slate-900/50'
+                  }`}
                 >
                   <div className="flex items-start gap-2.5">
                     {/* Expand Arrow if metadata exists */}
@@ -438,9 +447,10 @@ export default function SuperAdminLogsPage() {
                       className={`text-slate-500 hover:text-white transition-colors mt-0.5 ${
                         !hasMeta ? 'opacity-20 cursor-default' : ''
                       }`}
+                      title={hasMeta ? (isExpanded ? 'Collapse' : 'Expand Details') : 'No metadata'}
                     >
                       {isExpanded ? (
-                        <ChevronDown className="h-3.5 w-3.5" />
+                        <ChevronDown className="h-3.5 w-3.5 text-blue-400" />
                       ) : (
                         <ChevronRight className="h-3.5 w-3.5" />
                       )}
@@ -465,6 +475,14 @@ export default function SuperAdminLogsPage() {
                       [{safeCategory}]
                     </span>
 
+                    {/* Error Tag if captured */}
+                    {log.metadata?.errorReason && (
+                      <span className="px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-800 text-[10px] text-rose-300 font-mono shrink-0 flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3 text-rose-400" />
+                        <span className="truncate max-w-[200px]">{String(log.metadata.errorReason)}</span>
+                      </span>
+                    )}
+
                     {/* Message */}
                     <span
                       className={`flex-1 break-all ${
@@ -485,15 +503,111 @@ export default function SuperAdminLogsPage() {
                     </span>
                   </div>
 
-                  {/* Metadata JSON Inspection if toggled */}
+                  {/* Metadata & Error Details Inspection if toggled */}
                   {isExpanded && hasMeta && (
-                    <div className="mt-2 ml-7 p-2.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300 overflow-x-auto">
-                      <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 font-sans font-semibold">
-                        Event Metadata:
+                    <div className="mt-3 ml-6 space-y-3 pt-2 border-t border-slate-800/80 text-[11px]">
+                      {/* Highlighted Error Banner if present */}
+                      {log.metadata?.errorReason && (
+                        <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-800/90 text-rose-200 flex items-start gap-2.5 shadow-md">
+                          <AlertCircle className="h-4 w-4 text-rose-400 mt-0.5 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[10px] font-bold text-rose-300 uppercase tracking-wider">
+                              Server Error / Failure Reason:
+                            </div>
+                            <div className="text-xs font-semibold text-white mt-0.5 font-mono">
+                              {String(log.metadata.errorReason)}
+                            </div>
+                            {log.metadata.statusCode && (
+                              <div className="text-[11px] text-rose-300/80 mt-1">
+                                HTTP Status: <span className="font-bold text-white">{log.metadata.statusCode}</span> •
+                                Endpoint: <code className="text-rose-200">{log.metadata.method} {log.metadata.path}</code>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Request & Response Inspection Cards */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Request Summary & Body */}
+                        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                          <div className="flex items-center justify-between text-slate-400 font-semibold mb-2">
+                            <span className="flex items-center gap-1.5 text-xs text-blue-400">
+                              <FileCode className="h-3.5 w-3.5" />
+                              <span>Request Info & Payload</span>
+                            </span>
+                            {log.metadata?.method && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] font-mono text-white">
+                                {log.metadata.method}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="space-y-1 text-slate-400 text-[11px] mb-2 font-mono">
+                            <div><span className="text-slate-500">Path:</span> <span className="text-slate-200">{log.metadata?.path || '-'}</span></div>
+                            <div><span className="text-slate-500">Client IP:</span> <span className="text-slate-300">{log.metadata?.ip || '-'}</span></div>
+                            {log.metadata?.durationMs !== undefined && (
+                              <div><span className="text-slate-500">Latency:</span> <span className="text-emerald-400">{log.metadata.durationMs}ms</span></div>
+                            )}
+                          </div>
+
+                          {log.metadata?.requestBody ? (
+                            <div>
+                              <div className="text-[10px] text-slate-500 uppercase font-sans font-semibold mb-1">Body Payload:</div>
+                              <pre className="p-2 rounded bg-slate-900 border border-slate-800 text-slate-200 font-mono text-[10px] max-h-48 overflow-y-auto">
+                                {JSON.stringify(log.metadata.requestBody, null, 2)}
+                              </pre>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-slate-600 italic">No request payload sent</div>
+                          )}
+                        </div>
+
+                        {/* Response Payload */}
+                        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                          <div className="flex items-center justify-between text-slate-400 font-semibold mb-2">
+                            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+                              <ArrowRight className="h-3.5 w-3.5" />
+                              <span>Server Response</span>
+                            </span>
+                            {log.metadata?.statusCode && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                  log.metadata.statusCode >= 400
+                                    ? 'bg-rose-950 border border-rose-800 text-rose-300'
+                                    : 'bg-emerald-950 border border-emerald-800 text-emerald-300'
+                                }`}
+                              >
+                                HTTP {log.metadata.statusCode}
+                              </span>
+                            )}
+                          </div>
+
+                          {log.metadata?.responseBody ? (
+                            <pre
+                              className={`p-2 rounded border font-mono text-[10px] max-h-60 overflow-y-auto ${
+                                log.metadata.statusCode >= 400
+                                  ? 'bg-rose-950/30 border-rose-900/60 text-rose-200'
+                                  : 'bg-slate-900 border-slate-800 text-emerald-300'
+                              }`}
+                            >
+                              {JSON.stringify(log.metadata.responseBody, null, 2)}
+                            </pre>
+                          ) : (
+                            <div className="text-[10px] text-slate-600 italic">No response payload captured</div>
+                          )}
+                        </div>
                       </div>
-                      <pre className="text-emerald-400 font-mono">
-                        {JSON.stringify(log.metadata, null, 2)}
-                      </pre>
+
+                      {/* Raw Metadata Details */}
+                      <details className="text-[10px] text-slate-500">
+                        <summary className="cursor-pointer hover:text-slate-300 font-sans font-medium select-none">
+                          View full raw metadata JSON
+                        </summary>
+                        <pre className="mt-2 p-2.5 rounded bg-slate-900 border border-slate-800 text-slate-300 font-mono text-[10px] overflow-x-auto">
+                          {JSON.stringify(log.metadata, null, 2)}
+                        </pre>
+                      </details>
                     </div>
                   )}
                 </div>

@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building, Plus, Loader2, ExternalLink, Copy, Check, Globe } from 'lucide-react';
+import { Building, Plus, Loader2, ExternalLink, Copy, Check, Globe, RefreshCw, AlertCircle } from 'lucide-react';
 import { apiClient, setStoredAuth } from '@/lib/api';
+import ConfirmModal from '@/components/ConfirmModal';
 
 export default function SuperAdminTenantsPage() {
   const router = useRouter();
@@ -11,22 +12,43 @@ export default function SuperAdminTenantsPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   // New Tenant Form
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
+  const [isSlugCustom, setIsSlugCustom] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState('');
   const [initialPassword, setInitialPassword] = useState('Welcome123!Secure');
   const [tier, setTier] = useState('enterprise');
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [createdResult, setCreatedResult] = useState<any>(null);
+
+  // Confirmation Modal State for Status Toggle
+  const [statusConfirm, setStatusConfirm] = useState<{
+    isOpen: boolean;
+    tenantId: string;
+    currentStatus: string;
+    tenantName: string;
+  } | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+
+  const generateSlug = (val: string) => {
+    return val
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  };
 
   const fetchTenants = async () => {
     try {
       const data = await apiClient('/api/super-admin/tenants');
       setTenants(data.tenants || []);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setErrorBanner(err.message || 'Failed to fetch tenants');
     } finally {
       setLoading(false);
     }
@@ -44,7 +66,7 @@ export default function SuperAdminTenantsPage() {
       setStoredAuth(res.token, res.member, res.tenant);
       router.push('/dashboard');
     } catch (err: any) {
-      alert(err.message || 'Failed to enter tenant workspace');
+      setErrorBanner(err.message || 'Failed to enter tenant workspace');
     }
   };
 
@@ -56,18 +78,31 @@ export default function SuperAdminTenantsPage() {
     setTimeout(() => setCopiedSlug(null), 2000);
   };
 
-  const handleToggleStatus = async (tenantId: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
-    if (!confirm(`Are you sure you want to change this tenant status to ${newStatus}?`)) return;
+  const openStatusConfirm = (tenantId: string, currentStatus: string, tenantName: string) => {
+    setStatusConfirm({
+      isOpen: true,
+      tenantId,
+      currentStatus,
+      tenantName,
+    });
+  };
+
+  const handleExecuteStatusToggle = async () => {
+    if (!statusConfirm) return;
+    setStatusUpdating(true);
+    const newStatus = statusConfirm.currentStatus === 'active' ? 'suspended' : 'active';
 
     try {
-      await apiClient(`/api/super-admin/tenants/${tenantId}`, {
+      await apiClient(`/api/super-admin/tenants/${statusConfirm.tenantId}`, {
         method: 'PATCH',
         body: JSON.stringify({ status: newStatus }),
       });
+      setStatusConfirm(null);
       fetchTenants();
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to update tenant status');
+    } finally {
+      setStatusUpdating(false);
     }
   };
 
@@ -79,28 +114,51 @@ export default function SuperAdminTenantsPage() {
       });
       fetchTenants();
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to change tier');
     }
+  };
+
+  const handleNameChange = (val: string) => {
+    setName(val);
+    if (!isSlugCustom) {
+      setSlug(generateSlug(val));
+    }
+  };
+
+  const handleSlugChange = (val: string) => {
+    const cleaned = val.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    setSlug(cleaned);
+    const expected = generateSlug(name);
+    setIsSlugCustom(cleaned.length > 0 && cleaned !== expected);
+  };
+
+  const handleResetSlug = () => {
+    setSlug(generateSlug(name));
+    setIsSlugCustom(false);
   };
 
   const handleCreateTenant = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setFormError(null);
     setCreatedResult(null);
+
+    const finalSlug = slug || generateSlug(name);
 
     try {
       const res = await apiClient('/api/super-admin/tenants', {
         method: 'POST',
-        body: JSON.stringify({ name, slug, ownerEmail, initialPassword, tier }),
+        body: JSON.stringify({ name, slug: finalSlug, ownerEmail, initialPassword, tier }),
       });
 
       setCreatedResult({ ...res, initialPassword });
       setName('');
       setSlug('');
+      setIsSlugCustom(false);
       setOwnerEmail('');
       fetchTenants();
     } catch (err: any) {
-      alert(err.message);
+      setFormError(err.message || 'Failed to create tenant');
     } finally {
       setSubmitting(false);
     }
@@ -120,6 +178,7 @@ export default function SuperAdminTenantsPage() {
         <button
           onClick={() => {
             setCreatedResult(null);
+            setFormError(null);
             setShowModal(true);
           }}
           className="bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-amber-600/20"
@@ -128,6 +187,21 @@ export default function SuperAdminTenantsPage() {
           <span>Onboard New Tenant</span>
         </button>
       </div>
+
+      {errorBanner && (
+        <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+            <span>{errorBanner}</span>
+          </div>
+          <button
+            onClick={() => setErrorBanner(null)}
+            className="text-red-400 hover:text-red-200 text-xs font-semibold px-2 py-0.5 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Tenants Table */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
@@ -201,7 +275,7 @@ export default function SuperAdminTenantsPage() {
                   </select>
 
                   <button
-                    onClick={() => handleToggleStatus(t.id, t.status)}
+                    onClick={() => openStatusConfirm(t.id, t.status, t.name)}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
                       t.status === 'active'
                         ? 'bg-red-950/40 border-red-800 text-red-300 hover:bg-red-900/60'
@@ -225,6 +299,13 @@ export default function SuperAdminTenantsPage() {
             <p className="text-xs text-slate-400 mb-4">
               Manually provision an organization workspace with initial credentials
             </p>
+
+            {formError && (
+              <div className="mb-4 p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center gap-2 text-xs text-red-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+                <span>{formError}</span>
+              </div>
+            )}
 
             {createdResult ? (
               <div className="space-y-4">
@@ -279,26 +360,47 @@ export default function SuperAdminTenantsPage() {
                   <input
                     type="text"
                     value={name}
-                    onChange={(e) => {
-                      setName(e.target.value);
-                      if (!slug) setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-                    }}
+                    onChange={(e) => handleNameChange(e.target.value)}
                     placeholder="FinTech Global"
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Tenant Slug (Identifier)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-300">
+                      Tenant Slug (Identifier)
+                    </label>
+                    {isSlugCustom ? (
+                      <button
+                        type="button"
+                        onClick={handleResetSlug}
+                        className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1 font-medium"
+                        title="Reset slug to auto-match Company Name"
+                      >
+                        <RefreshCw className="h-2.5 w-2.5" />
+                        <span>Auto-sync with name</span>
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-slate-500 italic">
+                        Auto-generated
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={slug}
-                    onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                    onChange={(e) => handleSlugChange(e.target.value)}
                     placeholder="fintech-global"
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                    className={`w-full bg-slate-950 border rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none ${
+                      isSlugCustom ? 'border-amber-600/70 focus:border-amber-500' : 'border-slate-800 focus:border-amber-500'
+                    }`}
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Dedicated URL: <span className="font-mono text-slate-400">/login?tenant={slug || 'your-slug'}</span>
+                  </p>
                 </div>
 
                 <div>
@@ -309,7 +411,7 @@ export default function SuperAdminTenantsPage() {
                     onChange={(e) => setOwnerEmail(e.target.value)}
                     placeholder="admin@fintechglobal.com"
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
                   />
                 </div>
 
@@ -320,7 +422,7 @@ export default function SuperAdminTenantsPage() {
                     value={initialPassword}
                     onChange={(e) => setInitialPassword(e.target.value)}
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-500"
                   />
                 </div>
 
@@ -329,7 +431,7 @@ export default function SuperAdminTenantsPage() {
                   <select
                     value={tier}
                     onChange={(e) => setTier(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
                   >
                     <option value="developer">Developer</option>
                     <option value="pro">Pro</option>
@@ -348,7 +450,7 @@ export default function SuperAdminTenantsPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5"
+                    className="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-amber-600/20"
                   >
                     {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     <span>Provision Tenant</span>
@@ -359,6 +461,32 @@ export default function SuperAdminTenantsPage() {
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal for Tenant Status Toggle */}
+      <ConfirmModal
+        isOpen={Boolean(statusConfirm?.isOpen)}
+        onClose={() => setStatusConfirm(null)}
+        onConfirm={handleExecuteStatusToggle}
+        isLoading={statusUpdating}
+        title={statusConfirm?.currentStatus === 'active' ? 'Suspend Organization' : 'Reactivate Organization'}
+        variant={statusConfirm?.currentStatus === 'active' ? 'danger' : 'primary'}
+        confirmText={statusConfirm?.currentStatus === 'active' ? 'Yes, Suspend' : 'Yes, Reactivate'}
+        description={
+          <div>
+            Are you sure you want to {statusConfirm?.currentStatus === 'active' ? 'suspend' : 'activate'}{' '}
+            <strong className="text-white">{statusConfirm?.tenantName}</strong>?
+            {statusConfirm?.currentStatus === 'active' ? (
+              <p className="mt-1 text-slate-400">
+                End users and API keys under this organization will be temporarily blocked from signing in.
+              </p>
+            ) : (
+              <p className="mt-1 text-slate-400">
+                All services, logins, and API access for this workspace will be immediately restored.
+              </p>
+            )}
+          </div>
+        }
+      />
     </div>
   );
 }

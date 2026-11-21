@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Shield, Save, CheckCircle2, Loader2, Smartphone } from 'lucide-react';
+import { Shield, Save, CheckCircle2, Loader2, Smartphone, AlertCircle } from 'lucide-react';
 import { apiClient, getStoredTenant, setStoredAuth, getStoredMember, getStoredToken } from '@/lib/api';
 
 export default function BrandingPage() {
@@ -10,6 +10,7 @@ export default function BrandingPage() {
   const [logoUrl, setLogoUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   useEffect(() => {
     const t = getStoredTenant();
@@ -44,7 +45,7 @@ export default function BrandingPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to save branding');
     } finally {
       setSaving(false);
     }
@@ -52,6 +53,20 @@ export default function BrandingPage() {
 
   return (
     <div className="space-y-8">
+      {errorBanner && (
+        <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+            <span>{errorBanner}</span>
+          </div>
+          <button
+            onClick={() => setErrorBanner(null)}
+            className="text-red-400 hover:text-red-200 text-xs font-semibold px-2 py-0.5 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div>
         <h1 className="text-2xl font-bold text-white tracking-tight">White-Label Branding</h1>
         <p className="text-sm text-slate-400 mt-1">

@@ -8,30 +8,42 @@ import { sendPushToUser } from '../services/pushService.js';
 import { logAuditEvent } from '../services/auditService.js';
 import { dispatchTenantWebhook } from '../services/tenantWebhookService.js';
 
-const enrollSchema = z.object({
-  email: z.string().email('Valid email address required'),
-  issuer: z.string().optional(),
-});
+const enrollSchema = z
+  .object({
+    username: z.string().min(2, 'Username or identifier must be at least 2 characters').max(128).optional(),
+    email: z.string().min(2, 'Email or identifier must be at least 2 characters').max(128).optional(),
+    identifier: z.string().min(2, 'Identifier must be at least 2 characters').max(128).optional(),
+    issuer: z.string().optional(),
+  })
+  .refine((data) => data.username || data.email || data.identifier, {
+    message: 'Username, email or identifier is required',
+  });
 
-const pushChallengeSchema = z.object({
-  email: z.string().email('Valid email address required'),
-  issuer: z.string().optional(),
-  title: z.string().optional(),
-  message: z.string().optional(),
-});
+const pushChallengeSchema = z
+  .object({
+    username: z.string().min(2, 'Username or identifier must be at least 2 characters').max(128).optional(),
+    email: z.string().min(2, 'Email or identifier must be at least 2 characters').max(128).optional(),
+    identifier: z.string().min(2, 'Identifier must be at least 2 characters').max(128).optional(),
+    issuer: z.string().optional(),
+    title: z.string().optional(),
+    message: z.string().optional(),
+  })
+  .refine((data) => data.username || data.email || data.identifier, {
+    message: 'Username, email or identifier is required',
+  });
 
 export const tenantExternalApiController = {
   /**
-   * GET /api/tenant/:tenantId/users/status?email=user@example.com
+   * GET /api/tenant/:tenantId/users/status?username=user or ?email=user@example.com
    * Checks whether a user is enrolled and what 2FA factors are ready
    */
   async getUserStatus(req, res) {
-    const email = req.query.email || req.body?.email;
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({ error: 'User email parameter required' });
+    const rawId = req.query.username || req.query.email || req.query.identifier || req.body?.username || req.body?.email || req.body?.identifier;
+    if (!rawId || typeof rawId !== 'string') {
+      return res.status(400).json({ error: 'Username, email or user identifier required' });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = rawId.toLowerCase().trim();
     const tenantId = req.tenant.id;
 
     try {
@@ -48,7 +60,7 @@ export const tenantExternalApiController = {
       if (userRes.rows.length === 0) {
         return res.json({
           enrolled: false,
-          email: normalizedEmail,
+          username: normalizedEmail,
           tenantId,
           factors: [],
           activeDevices: 0,
@@ -64,7 +76,7 @@ export const tenantExternalApiController = {
 
       return res.json({
         enrolled: factors.length > 0,
-        email: normalizedEmail,
+        username: normalizedEmail,
         tenantId,
         factors,
         activeDevices,
@@ -86,8 +98,9 @@ export const tenantExternalApiController = {
       return res.status(400).json({ error: parseResult.error.errors[0].message });
     }
 
-    const { email, issuer, title, message } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
+    const { issuer, title, message } = parseResult.data;
+    const rawId = parseResult.data.username || parseResult.data.email || parseResult.data.identifier;
+    const normalizedEmail = rawId.toLowerCase().trim();
     const tenantId = req.tenant.id;
     const resolvedIssuer = issuer || req.tenant.branding?.issuerName || req.tenant.name || 'AuthGuard';
 
@@ -210,6 +223,17 @@ export const tenantExternalApiController = {
     const { requestId } = req.params;
 
     try {
+      // Cross-tenant verification: Ensure challenge belongs to current tenant
+      if (req.tenant?.id) {
+        const challengeCheck = await query(
+          `SELECT tenant_id FROM auth_challenges WHERE id = $1`,
+          [requestId]
+        );
+        if (challengeCheck.rows.length > 0 && challengeCheck.rows[0].tenant_id !== req.tenant.id) {
+          return res.status(403).json({ error: 'Forbidden: Request does not belong to this tenant workspace' });
+        }
+      }
+
       const result = await query(
         `SELECT id, status, expires_at, created_at FROM login_requests WHERE id = $1`,
         [requestId]
@@ -240,16 +264,26 @@ export const tenantExternalApiController = {
    * Verifies 6-digit TOTP passcode for user
    */
   async verifyTotp(req, res) {
-    const { email, code } = req.body;
-    if (!email || !code) {
-      return res.status(400).json({ error: 'Email and 6-digit TOTP code required' });
+    const rawId = req.body.username || req.body.email || req.body.identifier;
+    const { code } = req.body;
+    if (!rawId || !code) {
+      return res.status(400).json({ error: 'Username/email and 6-digit TOTP code required' });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = rawId.toLowerCase().trim();
     const cleanCode = String(code).trim().replace(/\s+/g, '');
     const tenantId = req.tenant.id;
 
     try {
+      // Cross-tenant verification: User MUST belong to this tenant in end_users
+      const tenantEndUser = await query(
+        `SELECT id FROM end_users WHERE tenant_id = $1 AND email = $2`,
+        [tenantId, normalizedEmail]
+      );
+      if (tenantEndUser.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found in this tenant workspace' });
+      }
+
       let secret = null;
       let userId = null;
 
@@ -300,7 +334,7 @@ export const tenantExternalApiController = {
       return res.json({
         success: true,
         valid: true,
-        email: normalizedEmail,
+        username: normalizedEmail,
         message: 'TOTP verified successfully',
       });
     } catch (err) {
@@ -319,8 +353,9 @@ export const tenantExternalApiController = {
       return res.status(400).json({ error: parseResult.error.errors[0].message });
     }
 
-    const { email, issuer } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
+    const { issuer } = parseResult.data;
+    const rawId = parseResult.data.username || parseResult.data.email || parseResult.data.identifier;
+    const normalizedEmail = rawId.toLowerCase().trim();
     const tenantId = req.tenant.id;
     const resolvedIssuer = issuer || req.tenant.branding?.issuerName || req.tenant.name || 'AuthGuard';
 
@@ -412,7 +447,7 @@ export const tenantExternalApiController = {
       return res.status(200).json({
         success: true,
         userId: endUserId,
-        email: normalizedEmail,
+        username: normalizedEmail,
         tenantId,
         issuer: resolvedIssuer,
         enrollToken,

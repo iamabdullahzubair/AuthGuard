@@ -1,14 +1,31 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Webhook, Plus, Trash2, Send, CheckCircle2, XCircle, Clock, Loader2 } from 'lucide-react';
+import {
+  Webhook,
+  Plus,
+  Trash2,
+  Send,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Loader2,
+  AlertCircle,
+  Code2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import ConfirmModal from '@/components/ConfirmModal';
+import WebhookPayloadViewer from '@/components/WebhookPayloadViewer';
 
 export default function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showPayloadRef, setShowPayloadRef] = useState(true);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   // New Webhook Form State
   const [url, setUrl] = useState('');
@@ -16,15 +33,25 @@ export default function WebhooksPage() {
     { key: 'Authorization', value: 'Bearer client_secret_token' },
   ]);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, string>>({});
+
+  // Confirm Modal State
+  const [deleteModalState, setDeleteModalState] = useState<{
+    isOpen: boolean;
+    hookId: string;
+    url: string;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const fetchWebhooks = async () => {
     try {
       const data = await apiClient('/api/tenant/webhooks');
       setWebhooks(data.webhooks || []);
       setDeliveries(data.deliveries || []);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setErrorBanner(err.message || 'Failed to fetch webhooks');
     } finally {
       setLoading(false);
     }
@@ -51,6 +78,7 @@ export default function WebhooksPage() {
   const handleCreateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setFormError(null);
 
     try {
       // Map custom headers array to object
@@ -75,19 +103,32 @@ export default function WebhooksPage() {
       setShowModal(false);
       fetchWebhooks();
     } catch (err: any) {
-      alert(err.message);
+      setFormError(err.message || 'Failed to register webhook');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDelete = async (hookId: string) => {
-    if (!confirm('Are you sure you want to delete this webhook?')) return;
+  const openDeleteModal = (hookId: string, hookUrl: string) => {
+    setDeleteModalState({
+      isOpen: true,
+      hookId,
+      url: hookUrl,
+    });
+  };
+
+  const handleExecuteDelete = async () => {
+    if (!deleteModalState) return;
+    setIsDeleting(true);
+
     try {
-      await apiClient(`/api/tenant/webhooks/${hookId}`, { method: 'DELETE' });
+      await apiClient(`/api/tenant/webhooks/${deleteModalState.hookId}`, { method: 'DELETE' });
+      setDeleteModalState(null);
       fetchWebhooks();
     } catch (err: any) {
-      alert(err.message);
+      setErrorBanner(err.message || 'Failed to delete webhook');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -97,7 +138,9 @@ export default function WebhooksPage() {
       const res = await apiClient(`/api/tenant/webhooks/${hookId}/test`, { method: 'POST' });
       setPingStatus((prev) => ({
         ...prev,
-        [hookId]: res.success ? `✓ HTTP ${res.status} (${res.durationMs}ms)` : `✕ HTTP ${res.status || 'Failed'} (${res.durationMs}ms)`,
+        [hookId]: res.success
+          ? `✓ HTTP ${res.status} (${res.durationMs}ms)`
+          : `✕ HTTP ${res.status || 'Failed'} (${res.durationMs}ms)`,
       }));
       fetchWebhooks();
     } catch (err: any) {
@@ -107,6 +150,7 @@ export default function WebhooksPage() {
 
   return (
     <div className="space-y-8">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Webhooks & Event Streams</h1>
@@ -115,7 +159,10 @@ export default function WebhooksPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={() => {
+            setFormError(null);
+            setShowModal(true);
+          }}
           className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20"
         >
           <Plus className="h-4 w-4" />
@@ -123,11 +170,29 @@ export default function WebhooksPage() {
         </button>
       </div>
 
+      {errorBanner && (
+        <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+            <span>{errorBanner}</span>
+          </div>
+          <button
+            onClick={() => setErrorBanner(null)}
+            className="text-red-400 hover:text-red-200 text-xs font-semibold px-2 py-0.5 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Configured Webhooks List */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-          <Webhook className="h-4 w-4 text-emerald-400" />
-          <span>Configured Endpoints</span>
+        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Webhook className="h-4 w-4 text-emerald-400" />
+            <span>Configured Endpoints</span>
+          </div>
+          <span className="text-[11px] text-slate-500 font-normal">Active: {webhooks.length}</span>
         </div>
 
         {loading ? (
@@ -136,7 +201,7 @@ export default function WebhooksPage() {
           </div>
         ) : webhooks.length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-sm">
-            No webhooks configured. Register your server endpoint above.
+            No webhooks configured yet. Click <strong className="text-slate-300">Register Webhook</strong> to connect your backend.
           </div>
         ) : (
           <div className="divide-y divide-slate-800">
@@ -157,7 +222,9 @@ export default function WebhooksPage() {
                     </div>
 
                     <div className="text-slate-400 font-mono text-[11px] flex items-center gap-4 flex-wrap">
-                      <span>Secret: <span className="text-slate-300">{h.secret.slice(0, 10)}...</span></span>
+                      <span>
+                        Secret: <span className="text-slate-300">{h.secret.slice(0, 10)}...</span>
+                      </span>
                       <span>
                         Custom Headers:{' '}
                         {headerKeys.length > 0 ? (
@@ -185,7 +252,7 @@ export default function WebhooksPage() {
                     </button>
 
                     <button
-                      onClick={() => handleDelete(h.id)}
+                      onClick={() => openDeleteModal(h.id, h.url)}
                       className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
                       title="Delete Webhook"
                     >
@@ -195,6 +262,33 @@ export default function WebhooksPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Interactive Webhook Documentation & Payload Spec */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+        <button
+          type="button"
+          onClick={() => setShowPayloadRef(!showPayloadRef)}
+          className="w-full p-4 text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center justify-between hover:bg-slate-850/50 transition-colors text-left"
+        >
+          <div className="flex items-center gap-2">
+            <Code2 className="h-4 w-4 text-blue-400" />
+            <span>Webhook Payload & Headers Specification</span>
+          </div>
+          <div className="flex items-center gap-2 text-slate-400 text-xs font-normal">
+            <span>{showPayloadRef ? 'Collapse' : 'Show Spec & Schema'}</span>
+            {showPayloadRef ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </button>
+
+        {showPayloadRef && (
+          <div className="p-5 border-t border-slate-800 space-y-4">
+            <p className="text-xs text-slate-400">
+              Below is the exact schema, headers, and cryptographic signature dispatched to your server when a webhook fires:
+            </p>
+            <WebhookPayloadViewer />
           </div>
         )}
       </div>
@@ -211,7 +305,7 @@ export default function WebhooksPage() {
 
         {deliveries.length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-sm">
-            No webhook deliveries recorded yet.
+            No webhook deliveries recorded yet. Trigger a login or use Test Ping to record delivery logs.
           </div>
         ) : (
           <div className="divide-y divide-slate-800 font-mono text-xs">
@@ -245,11 +339,20 @@ export default function WebhooksPage() {
       {/* Modal: Register Webhook */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-base font-bold text-white mb-1">Register Webhook Endpoint</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Enter your receiver URL and any custom headers required by your backend
-            </p>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[92vh] overflow-y-auto space-y-4">
+            <div>
+              <h3 className="text-base font-bold text-white mb-1">Register Webhook Endpoint</h3>
+              <p className="text-xs text-slate-400">
+                Configure your server URL and inspect the payload format AuthGuard will send
+              </p>
+            </div>
+
+            {formError && (
+              <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center gap-2 text-xs text-red-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+                <span>{formError}</span>
+              </div>
+            )}
 
             <form onSubmit={handleCreateWebhook} className="space-y-4">
               <div>
@@ -311,6 +414,14 @@ export default function WebhooksPage() {
                 </div>
               </div>
 
+              {/* Live Preview Inside Modal */}
+              <div className="space-y-1.5 pt-1">
+                <label className="block text-xs font-semibold text-slate-400">
+                  Outgoing Request Preview (Live):
+                </label>
+                <WebhookPayloadViewer customHeaders={customHeaders} compact={true} />
+              </div>
+
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
@@ -322,7 +433,7 @@ export default function WebhooksPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-xl text-xs transition-colors flex items-center gap-1.5"
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-xl text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-blue-600/20"
                 >
                   {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>Save Webhook</span>
@@ -332,6 +443,29 @@ export default function WebhooksPage() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(deleteModalState?.isOpen)}
+        onClose={() => setDeleteModalState(null)}
+        onConfirm={handleExecuteDelete}
+        isLoading={isDeleting}
+        title="Delete Webhook"
+        variant="danger"
+        confirmText="Yes, Delete Webhook"
+        description={
+          <div>
+            Are you sure you want to delete the webhook for{' '}
+            <code className="text-white font-mono bg-slate-950 px-1 py-0.5 rounded break-all">
+              {deleteModalState?.url}
+            </code>
+            ?
+            <p className="mt-2 text-slate-400">
+              AuthGuard will immediately cease sending events to this URL. Delivery history for this webhook will also be removed.
+            </p>
+          </div>
+        }
+      />
     </div>
   );
 }

@@ -13,37 +13,32 @@ import { broadcastLog } from './logBroadcaster.js';
  * @returns {Promise<{ sent: number, failed: number }>}
  */
 export async function sendPushToUser(userId, payload, tenantId = null) {
-  const queries = [
-    query(
-      `SELECT id, device_name, push_subscription, 'devices' as source_table 
-       FROM devices 
-       WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    )
-  ];
+  const queries = [];
 
   if (tenantId) {
+    // Multi-tenant: Strictly query devices belonging to this tenant
     queries.push(
       query(
         `SELECT id, device_name, push_subscription, 'end_user_devices' as source_table
          FROM end_user_devices 
-         WHERE tenant_id = $1 AND end_user_id = $2 AND status = 'active'`,
+         WHERE tenant_id = $1 AND (end_user_id = $2 OR end_user_id IN (SELECT id FROM end_users WHERE tenant_id = $1 AND email = (SELECT email FROM users WHERE id = $2))) AND status = 'active'`,
         [tenantId, userId]
       )
     );
   } else {
+    // Root superadmin / standalone: Query legacy devices table
     queries.push(
       query(
-        `SELECT id, device_name, push_subscription, 'end_user_devices' as source_table
-         FROM end_user_devices 
-         WHERE end_user_id = $1 AND status = 'active'`,
+        `SELECT id, device_name, push_subscription, 'devices' as source_table 
+         FROM devices 
+         WHERE user_id = $1 AND status = 'active'`,
         [userId]
       )
     );
   }
 
   const results = await Promise.all(queries);
-  const rawDevices = [...results[0].rows, ...(results[1]?.rows || [])];
+  const rawDevices = results[0]?.rows || [];
 
   // Deduplicate subscriptions by endpoint
   const seenEndpoints = new Set();

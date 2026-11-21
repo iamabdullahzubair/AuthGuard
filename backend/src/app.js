@@ -33,10 +33,34 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(globalLimiter);
 
+// Helper to recursively sanitize sensitive keys before logging or broadcasting
+function sanitizeData(data, depth = 0) {
+  if (!data || depth > 3) return data;
+  if (typeof data !== 'object') return data;
+  if (Array.isArray(data)) return data.map(item => sanitizeData(item, depth + 1));
+  
+  const sanitized = {};
+  const sensitiveKeys = ['password', 'secret', 'token', 'privatekey', 'signature', 'authorization', 'cookie'];
+  for (const [key, value] of Object.entries(data)) {
+    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
+      sanitized[key] = '***';
+    } else if (typeof value === 'object' && value !== null) {
+      sanitized[key] = sanitizeData(value, depth + 1);
+    } else {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
 // High-Fidelity Request Logger (Dispatches to Console, Disk File, and Super Admin Live Stream)
 app.use((req, res, next) => {
-  // Ignore noisy health checks and the SSE log stream itself from logging loops
-  if (req.path === '/api/health' || req.originalUrl?.includes('/logs/stream') || req.path?.includes('/logs/stream')) {
+  // Ignore noisy health checks and any /logs endpoints (stream and REST polling) to prevent self-logging feedback loops
+  if (
+    req.path === '/api/health' ||
+    req.path?.includes('/logs') ||
+    req.originalUrl?.includes('/logs')
+  ) {
     return next();
   }
 
@@ -46,6 +70,26 @@ app.use((req, res, next) => {
     req.headers['x-forwarded-for']?.split(',')[0].trim() ||
     req.socket.remoteAddress ||
     '127.0.0.1';
+
+  // Intercept response payload to capture error messages and responses
+  let capturedBody = null;
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    capturedBody = body;
+    return originalJson(body);
+  };
+
+  const originalSend = res.send.bind(res);
+  res.send = (body) => {
+    if (!capturedBody && typeof body === 'string') {
+      try {
+        capturedBody = JSON.parse(body);
+      } catch {
+        capturedBody = body.length > 500 ? body.slice(0, 500) + '...' : body;
+      }
+    }
+    return originalSend(body);
+  };
 
   res.on('finish', () => {
     const duration = Date.now() - start;
@@ -62,10 +106,23 @@ app.use((req, res, next) => {
     const queryStr = Object.keys(req.query).length > 0 ? `?${new URLSearchParams(req.query).toString()}` : '';
     const fullPath = `${req.path}${queryStr}`;
 
+    // Extract human-readable failure reason if returned in response payload
+    let errorReason = null;
+    if (isError && capturedBody) {
+      if (typeof capturedBody === 'object' && capturedBody !== null) {
+        errorReason = capturedBody.error || capturedBody.message || capturedBody.detail || null;
+      } else if (typeof capturedBody === 'string') {
+        errorReason = capturedBody;
+      }
+    }
+
+    const errorSuffix = errorReason ? ` [Failure: ${errorReason}]` : '';
+    const message = `${req.method.padEnd(6)} ${fullPath} -> ${statusCode}${errorSuffix} (${duration}ms) [ip: ${clientIp}]`;
+
     broadcastLog({
       level,
       category,
-      message: `${req.method.padEnd(6)} ${fullPath} -> ${statusCode} (${duration}ms) [ip: ${clientIp}]`,
+      message,
       metadata: {
         method: req.method,
         path: req.path,
@@ -74,6 +131,9 @@ app.use((req, res, next) => {
         durationMs: duration,
         ip: clientIp,
         userAgent: req.headers['user-agent']?.slice(0, 150) || null,
+        errorReason: errorReason || null,
+        requestBody: req.body ? sanitizeData(req.body) : null,
+        responseBody: capturedBody ? sanitizeData(capturedBody) : null,
       },
     });
   });
