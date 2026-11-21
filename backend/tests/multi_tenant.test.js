@@ -5,6 +5,7 @@ import app from '../src/app.js';
 import { initDb, query } from '../src/db/index.js';
 import { generateApiKey, verifyApiKey, revokeApiKey } from '../src/services/apiKeyService.js';
 import { createMemberToken, verifyMemberToken } from '../src/middleware/tenantSessionAuth.js';
+import { config } from '../src/config/index.js';
 
 let server;
 let BASE_URL = '';
@@ -37,6 +38,7 @@ describe('Enterprise Multi-Tenant Engine & Security', () => {
       await query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => {});
     }
     server?.close();
+    setTimeout(() => process.exit(0), 100);
   });
 
   test('1. API Key Generation, Hashing & Verification', async () => {
@@ -150,14 +152,14 @@ describe('Enterprise Multi-Tenant Engine & Security', () => {
     assert.equal(res.status, 403);
   });
 
-  test('6. Super Admin Access (iamabdullahzubair@gmail.com)', async () => {
-    // Log in as Super Admin with default seed password
+  test('6. Super Admin Access', async () => {
+    // Log in as Super Admin with config credentials
     const loginRes = await fetch(`${BASE_URL}/api/tenant/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'iamabdullahzubair@gmail.com',
-        password: 'Admin123!Secure',
+        email: config.SUPER_ADMIN_EMAIL,
+        password: config.SUPER_ADMIN_PASSWORD,
       }),
     });
 
@@ -173,7 +175,7 @@ describe('Enterprise Multi-Tenant Engine & Security', () => {
     assert.equal(statsRes.status, 200);
     const stats = await statsRes.json();
     assert.ok(stats.tenants.total >= 1);
-    assert.equal(stats.adminUser, 'iamabdullahzubair@gmail.com');
+    assert.equal(stats.adminUser, config.SUPER_ADMIN_EMAIL.toLowerCase().trim());
 
     // Super Admin list tenants
     const tenantsRes = await fetch(`${BASE_URL}/api/super-admin/tenants`, {

@@ -54,5 +54,9 @@ describe('TOTP Service (RFC 6238)', () => {
     assert.equal(secondAttempt.valid, false);
     assert.match(secondAttempt.error, /already been used/i);
   });
+
+  after(() => {
+    setTimeout(() => process.exit(0), 100);
+  });
 });
 

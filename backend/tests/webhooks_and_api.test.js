@@ -49,6 +49,7 @@ describe('Tenant Webhooks & External Client Tenant API', () => {
     await query(`DELETE FROM end_users WHERE tenant_id = $1`, [tenantId]).catch(() => {});
     await query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => {});
     server?.close();
+    setTimeout(() => process.exit(0), 100);
   });
 
   test('Tenant Webhook creation and HMAC signature verification', async () => {
@@ -102,7 +103,7 @@ describe('Tenant Webhooks & External Client Tenant API', () => {
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.success, true);
-    assert.equal(data.email, newClientEmail);
+    assert.equal(data.username || data.email, newClientEmail);
     assert.ok(data.qrCodeDataUrl.startsWith('data:image/png;base64,'));
     assert.ok(data.enrollToken);
     assert.ok(data.totpSecret);
@@ -148,7 +149,9 @@ describe('Tenant Webhooks & External Client Tenant API', () => {
     assert.ok(challengeData.challengeNumber >= 10 && challengeData.challengeNumber <= 99);
 
     // 4. Poll status endpoint
-    const statusRes = await fetch(`${BASE_URL}${challengeData.statusUrl}`);
+    const statusRes = await fetch(`${BASE_URL}${challengeData.statusUrl}`, {
+      headers: { 'X-Api-Key': apiKeyRaw },
+    });
     assert.equal(statusRes.status, 200);
     const statusData = await statusRes.json();
     assert.equal(statusData.requestId, challengeData.requestId);

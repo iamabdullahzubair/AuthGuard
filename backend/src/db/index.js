@@ -175,7 +175,7 @@ export const initDb = async () => {
       `);
 
       // Seed Super Admin from Environment Config
-      const adminEmail = (config.SUPER_ADMIN_EMAIL || 'iamabdullahzubair@gmail.com').toLowerCase().trim();
+      const adminEmail = (config.SUPER_ADMIN_EMAIL || 'admin@example.com').toLowerCase().trim();
       const adminPassword = config.SUPER_ADMIN_PASSWORD || 'Admin123!Secure';
 
       const superAdminCheck = await client.query(

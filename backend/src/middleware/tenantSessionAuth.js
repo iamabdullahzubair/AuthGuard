@@ -174,7 +174,7 @@ export async function tenantSessionAuth(req, res, next) {
 }
 
 /**
- * Middleware: Strictly require Super Admin privilege (iamabdullahzubair@gmail.com)
+ * Middleware: Strictly require Super Admin privilege
  */
 export function requireSuperAdmin(req, res, next) {
   if (!req.member || !req.member.isSuperAdmin) {

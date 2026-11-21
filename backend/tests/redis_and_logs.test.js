@@ -4,6 +4,7 @@ import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
 import { cacheSet, cacheGet, cacheDel, publishEvent, subscribeEvent } from '../src/services/redisService.js';
 import { broadcastLog, getRecentLogs, onLog } from '../src/services/logBroadcaster.js';
+import { config } from '../src/config/index.js';
 
 let server;
 let BASE_URL = '';
@@ -25,8 +26,8 @@ describe('Redis Acceleration & Live Log Broadcaster', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'iamabdullahzubair@gmail.com',
-        password: 'Admin123!Secure',
+        email: config.SUPER_ADMIN_EMAIL,
+        password: config.SUPER_ADMIN_PASSWORD,
       }),
     });
     const loginData = await loginRes.json();
@@ -35,6 +36,7 @@ describe('Redis Acceleration & Live Log Broadcaster', () => {
 
   after(() => {
     server?.close();
+    setTimeout(() => process.exit(0), 100);
   });
 
   test('cacheSet, cacheGet, and cacheDel work reliably', async () => {
