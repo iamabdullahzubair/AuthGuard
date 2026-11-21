@@ -194,6 +194,7 @@ export const tenantExternalApiController = {
 
       return res.status(200).json({
         success: true,
+        challengeId: requestId,
         requestId,
         challengeNumber,
         devicesNotified: pushResult.sent,

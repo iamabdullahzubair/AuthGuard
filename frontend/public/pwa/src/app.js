@@ -456,7 +456,7 @@ async function loadApprovalRequest(requestId, initialData = null) {
 
   if (!reqData || !reqData.options) {
     try {
-      const res = await fetch(`/api/login/request/${requestId}`);
+      const res = await fetch(`/api/auth/challenge/${requestId}`);
       if (!res.ok) throw new Error('Could not fetch request details.');
       reqData = await res.json();
     } catch (err) {
@@ -520,7 +520,7 @@ async function respondToLogin(requestId, chosenNumber, decision) {
     showToast('Signing approval with hardware-backed key...', 'info');
     const signature = await signPayload(keyRecord.privateKey, canonicalPayload);
 
-    const res = await fetch('/api/login/respond', {
+    const res = await fetch('/api/auth/challenge/respond', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

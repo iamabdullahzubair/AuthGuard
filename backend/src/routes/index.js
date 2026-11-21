@@ -23,6 +23,6 @@ router.get('/vapid-public-key', (req, res, next) => {
   authRoutes(req, res, next);
 });
 router.use('/enroll', authRoutes);
-router.use('/login', authRoutes);
+router.use('/challenge', authRoutes);
 
 export default router;

@@ -28,7 +28,9 @@ export async function dispatchTenantWebhook(tenantId, event, data) {
         ? JSON.parse(hook.events)
         : [];
 
-      if (subscribedEvents.length > 0 && !subscribedEvents.includes(event) && event !== 'ping') {
+      // STRICT FILTER: Never fire an event unless the user explicitly selected/subscribed to it!
+      // (Exception: explicit 'test.ping' manual test triggers bypass filter for debugging)
+      if (!subscribedEvents.includes(event) && event !== 'test.ping') {
         continue;
       }
 
@@ -98,7 +100,7 @@ export async function deliverToWebhook(tenantId, hook, event, data) {
 
     responseStatus = resp.status;
     const text = await resp.text();
-    responseBody = text.slice(0, 500); // save first 500 chars
+    responseBody = text.slice(0, 1000); // save up to 1000 chars for diagnostics
     success = resp.ok;
   } catch (err) {
     responseBody = `Error: ${err.message}`;
@@ -124,5 +126,12 @@ export async function deliverToWebhook(tenantId, hook, event, data) {
     ]
   ).catch((e) => console.error('[Webhook Log Insert Error]:', e.message));
 
-  return { success, status: responseStatus, durationMs };
+  return {
+    success,
+    status: responseStatus,
+    durationMs,
+    responseBody,
+    sentHeaders: headers,
+    sentPayload: payloadObj,
+  };
 }

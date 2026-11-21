@@ -417,7 +417,46 @@ export const tenantPortalController = {
   },
 
   /**
+   * PATCH /api/tenant/webhooks/:id
+   */
+  async updateWebhook(req, res) {
+    const { url, customHeaders, events, is_active } = req.body;
+    const updates = [];
+    const values = [req.params.id, req.tenant.id];
+    let idx = 3;
+
+    if (url && typeof url === 'string') {
+      updates.push(`url = $${idx++}`);
+      values.push(url.trim());
+    }
+    if (customHeaders && typeof customHeaders === 'object') {
+      updates.push(`custom_headers = $${idx++}`);
+      values.push(JSON.stringify(customHeaders));
+    }
+    if (events && Array.isArray(events)) {
+      updates.push(`events = $${idx++}`);
+      values.push(JSON.stringify(events));
+    }
+    if (typeof is_active === 'boolean') {
+      updates.push(`is_active = $${idx++}`);
+      values.push(is_active);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No update fields provided' });
+    }
+
+    updates.push(`updated_at = NOW()`);
+    const sql = `UPDATE tenant_webhooks SET ${updates.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`;
+    const result = await query(sql, values);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Webhook not found' });
+    return res.json({ success: true, webhook: result.rows[0] });
+  },
+
+  /**
    * POST /api/tenant/webhooks/:id/test
+   * Live Webhook Playground Runner: fires real HTTP call to webhook with chosen event & payload
    */
   async testWebhook(req, res) {
     const check = await query(
@@ -427,10 +466,55 @@ export const tenantPortalController = {
     if (check.rows.length === 0) return res.status(404).json({ error: 'Webhook not found' });
 
     const hook = check.rows[0];
-    const testData = { message: 'AuthGuard test ping', time: new Date().toISOString() };
-    const deliveryResult = await deliverToWebhook(req.tenant.id, hook, 'test.ping', testData);
+    const event = req.body.event || 'test.ping';
 
-    return res.json({ success: deliveryResult.success, status: deliveryResult.status, durationMs: deliveryResult.durationMs });
+    // Mock data templates if custom data not supplied
+    let testData = req.body.data;
+    if (!testData || typeof testData !== 'object') {
+      if (event === 'login.approved') {
+        testData = {
+          requestId: crypto.randomUUID(),
+          username: 'alex.developer@example.com',
+          status: 'approved',
+          approvedAt: new Date().toISOString(),
+          ipAddress: '192.168.1.105',
+          userAgent: 'AuthGuard-PWA/1.0 (Android; Mobile)',
+        };
+      } else if (event === 'login.denied') {
+        testData = {
+          requestId: crypto.randomUUID(),
+          username: 'alex.developer@example.com',
+          status: 'denied',
+          reason: 'user_denied',
+          deniedAt: new Date().toISOString(),
+          ipAddress: '192.168.1.105',
+        };
+      } else if (event === 'user.enrolled') {
+        testData = {
+          userId: crypto.randomUUID(),
+          email: 'new.member@example.com',
+          enrolledAt: new Date().toISOString(),
+          twoFactorEnabled: true,
+        };
+      } else {
+        testData = {
+          message: 'AuthGuard webhook playground test ping',
+          time: new Date().toISOString(),
+          system: 'AuthGuard 2.0 Webhook Engine',
+        };
+      }
+    }
+
+    const deliveryResult = await deliverToWebhook(req.tenant.id, hook, event, testData);
+
+    return res.json({
+      success: deliveryResult.success,
+      status: deliveryResult.status,
+      durationMs: deliveryResult.durationMs,
+      responseBody: deliveryResult.responseBody,
+      sentHeaders: deliveryResult.sentHeaders,
+      sentPayload: deliveryResult.sentPayload,
+    });
   },
 
   /**

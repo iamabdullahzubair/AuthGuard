@@ -15,12 +15,16 @@ const enrollCompleteSchema = z.object({
 });
 
 const respondSchema = z.object({
-  request_id: z.string().uuid(),
-  chosen_number: z.number().int(),
+  request_id: z.string().optional(),
+  challenge_id: z.string().optional(),
+  challengeId: z.string().optional(),
+  chosen_number: z.number().int().optional().default(0),
   decision: z.enum(['approve', 'deny']),
   timestamp: z.number().int(),
   signature: z.string().min(10),
   device_id: z.string().optional(),
+}).refine((data) => data.request_id || data.challenge_id || data.challengeId, {
+  message: 'challenge_id or request_id required',
 });
 
 export const authController = {
@@ -157,7 +161,8 @@ export const authController = {
       return res.status(400).json({ error: 'Invalid response payload', details: parseResult.error.errors });
     }
 
-    const { request_id, chosen_number, decision, timestamp, signature, device_id } = parseResult.data;
+    const { request_id, challenge_id, challengeId, chosen_number, decision, timestamp, signature, device_id } = parseResult.data;
+    const effectiveChallengeId = challenge_id || challengeId || request_id;
 
     // Check freshness (120s window)
     const now = Date.now();
@@ -165,22 +170,22 @@ export const authController = {
       return res.status(400).json({ error: 'Timestamp is outside acceptable window (replay protection)' });
     }
 
-    const challenge = await getChallenge(request_id);
+    const challenge = await getChallenge(effectiveChallengeId);
     if (!challenge) {
-      return res.status(404).json({ error: 'Login request not found or expired' });
+      return res.status(404).json({ error: 'Challenge not found or expired' });
     }
 
     if (challenge.status !== 'pending') {
-      return res.status(400).json({ error: `Login request is already ${challenge.status}` });
+      return res.status(400).json({ error: `Challenge is already ${challenge.status}` });
     }
 
     if (new Date(challenge.expiresAt) < new Date()) {
-      await updateChallengeStatus(request_id, 'expired');
-      return res.status(400).json({ error: 'Login request has expired' });
+      await updateChallengeStatus(effectiveChallengeId, 'expired');
+      return res.status(400).json({ error: 'Challenge has expired' });
     }
 
     const canonicalPayload = JSON.stringify({
-      request_id,
+      request_id: request_id || effectiveChallengeId,
       chosen_number,
       decision,
       timestamp,
@@ -220,17 +225,18 @@ export const authController = {
         userId: challenge.endUserId,
         event: 'LOGIN_PUSH_SIGNATURE_INVALID',
         req,
-        metadata: { request_id, tenantId: challenge.tenantId },
+        metadata: { challengeId: effectiveChallengeId, tenantId: challenge.tenantId },
       });
       return res.status(401).json({ error: 'Cryptographic signature verification failed' });
     }
 
     // Handle Deny
     if (decision === 'deny') {
-      await updateChallengeStatus(request_id, 'denied', { deviceId: verifiedDevice.id });
+      await updateChallengeStatus(effectiveChallengeId, 'denied', { deviceId: verifiedDevice.id });
 
       dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
-        requestId: request_id,
+        challengeId: effectiveChallengeId,
+        requestId: effectiveChallengeId,
         status: 'denied',
         reason: 'user_denied',
         timestamp: Date.now(),
@@ -242,7 +248,8 @@ export const authController = {
         event: 'LOGIN_PUSH_DENIED_BY_USER',
         req,
         metadata: {
-          requestId: request_id,
+          challengeId: effectiveChallengeId,
+          requestId: effectiveChallengeId,
           challengeNumber: challenge.challengeNumber,
           email: challenge.account,
           deviceId: verifiedDevice.id,
@@ -255,10 +262,11 @@ export const authController = {
 
     // Handle Approve: check number match
     if (chosen_number !== challenge.challengeNumber) {
-      await updateChallengeStatus(request_id, 'denied', { deviceId: verifiedDevice.id });
+      await updateChallengeStatus(effectiveChallengeId, 'denied', { deviceId: verifiedDevice.id });
 
       dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
-        requestId: request_id,
+        challengeId: effectiveChallengeId,
+        requestId: effectiveChallengeId,
         status: 'denied',
         reason: 'number_mismatch',
         timestamp: Date.now(),
@@ -270,7 +278,8 @@ export const authController = {
         event: 'LOGIN_PUSH_NUMBER_MISMATCH',
         req,
         metadata: {
-          requestId: request_id,
+          challengeId: effectiveChallengeId,
+          requestId: effectiveChallengeId,
           chosen_number,
           challengeNumber: challenge.challengeNumber,
           expected: challenge.challengeNumber,
@@ -287,7 +296,7 @@ export const authController = {
     }
 
     // Successful Approval
-    await updateChallengeStatus(request_id, 'approved', { deviceId: verifiedDevice.id });
+    await updateChallengeStatus(effectiveChallengeId, 'approved', { deviceId: verifiedDevice.id });
     await query(`UPDATE end_user_devices SET last_used_at = NOW() WHERE id = $1`, [verifiedDevice.id]).catch(() => {});
 
     await logAuditEvent({
@@ -296,7 +305,8 @@ export const authController = {
       event: 'LOGIN_PUSH_APPROVED',
       req,
       metadata: {
-        requestId: request_id,
+        challengeId: effectiveChallengeId,
+        requestId: effectiveChallengeId,
         challengeNumber: challenge.challengeNumber,
         email: challenge.account,
         deviceId: verifiedDevice.id,
@@ -306,7 +316,8 @@ export const authController = {
 
     // Dispatch to tenant webhook
     dispatchTenantWebhook(challenge.tenantId, 'login.approved', {
-      requestId: request_id,
+      challengeId: effectiveChallengeId,
+      requestId: effectiveChallengeId,
       userId: challenge.endUserId,
       email: challenge.account,
       deviceId: verifiedDevice.id,

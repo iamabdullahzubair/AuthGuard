@@ -39,6 +39,7 @@ portalRouter.delete('/api-keys/:id', tenantPortalController.revokeApiKey);
 // Webhook Management (Strictly tenant_id based)
 portalRouter.get('/webhooks', tenantPortalController.listWebhooks);
 portalRouter.post('/webhooks', tenantPortalController.createWebhook);
+portalRouter.patch('/webhooks/:id', tenantPortalController.updateWebhook);
 portalRouter.delete('/webhooks/:id', tenantPortalController.deleteWebhook);
 portalRouter.post('/webhooks/:id/test', tenantPortalController.testWebhook);
 
