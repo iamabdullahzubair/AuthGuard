@@ -1,0 +1,48 @@
+name: Production CI/CD Deployment
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into EC2 and Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "========================================================"
+            echo "🚀 GitHub Actions: Triggering Remote Deployment on EC2"
+            echo "========================================================"
+            
+            # 1. Locate project directory on EC2
+            if [ -d "$HOME/AuthGuard" ]; then
+              cd "$HOME/AuthGuard"
+            elif [ -f "./deploy.sh" ]; then
+              true
+            else
+              FOUND_DIR=$(find "$HOME" -maxdepth 2 -name "deploy.sh" -exec dirname {} \; 2>/dev/null | head -n 1)
+              if [ -n "$FOUND_DIR" ]; then
+                cd "$FOUND_DIR"
+              else
+                echo "❌ Error: Could not find project directory with deploy.sh in $HOME!"
+                exit 1
+              fi
+            fi
+            
+            echo "📍 Deploying in directory: $(pwd)"
+            
+            # 2. Make scripts executable
+            chmod +x deploy.sh init-letsencrypt.sh 2>/dev/null || true
+            
+            # 3. Execute zero-downtime deployment script
+            ./deploy.sh
