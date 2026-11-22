@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building, Plus, Loader2, ExternalLink, Copy, Check, Globe, RefreshCw, AlertCircle } from 'lucide-react';
+import { Building, Plus, Loader2, ExternalLink, Copy, Check, Globe, RefreshCw, AlertCircle, KeyRound, X, ShieldCheck } from 'lucide-react';
 import { apiClient, setStoredAuth } from '@/lib/api';
 import ConfirmModal from '@/components/ConfirmModal';
 
@@ -33,6 +33,13 @@ export default function SuperAdminTenantsPage() {
     tenantName: string;
   } | null>(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
+
+  // Reset Tenant Password State
+  const [resetTenant, setResetTenant] = useState<any | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
 
   const generateSlug = (val: string) => {
     return val
@@ -164,6 +171,47 @@ export default function SuperAdminTenantsPage() {
     }
   };
 
+  const handleGeneratePassword = () => {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*';
+    let pass = '';
+    for (let i = 0; i < 14; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setResetPassword(pass);
+  };
+
+  const handleExecutePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetTenant) return;
+
+    if (resetPassword.length < 8) {
+      setResetError('New password must be at least 8 characters long');
+      return;
+    }
+
+    setResetSubmitting(true);
+    setResetError(null);
+    setResetSuccess(null);
+
+    try {
+      const res = await apiClient(`/api/super-admin/tenants/${resetTenant.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ newPassword: resetPassword }),
+      });
+
+      setResetSuccess(res.message || 'Tenant password reset successfully');
+      setTimeout(() => {
+        setResetTenant(null);
+        setResetPassword('');
+        setResetSuccess(null);
+      }, 2500);
+    } catch (err: any) {
+      setResetError(err.message || 'Failed to reset tenant password');
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
+
   const getOrigin = () => (typeof window !== 'undefined' ? window.location.origin : '');
 
   return (
@@ -273,6 +321,20 @@ export default function SuperAdminTenantsPage() {
                     <option value="pro">Pro</option>
                     <option value="enterprise">Enterprise</option>
                   </select>
+
+                  <button
+                    onClick={() => {
+                      setResetTenant(t);
+                      setResetPassword('');
+                      setResetError(null);
+                      setResetSuccess(null);
+                    }}
+                    title="Reset Tenant Owner Password"
+                    className="bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                  >
+                    <KeyRound className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Reset Password</span>
+                  </button>
 
                   <button
                     onClick={() => openStatusConfirm(t.id, t.status, t.name)}
@@ -487,6 +549,114 @@ export default function SuperAdminTenantsPage() {
           </div>
         }
       />
+
+      {/* Modal: Reset Tenant Owner Password */}
+      {resetTenant && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl relative text-slate-100">
+            <button
+              onClick={() => {
+                setResetTenant(null);
+                setResetPassword('');
+                setResetError(null);
+                setResetSuccess(null);
+              }}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              title="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-10 w-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Reset Tenant Password</h3>
+                <p className="text-xs text-slate-400">
+                  Update credentials for workspace <strong className="text-white">{resetTenant.name}</strong>
+                </p>
+              </div>
+            </div>
+
+            {resetError && (
+              <div className="mb-4 p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-start gap-2.5 text-xs text-red-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {resetSuccess && (
+              <div className="mb-4 p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl flex items-center gap-2.5 text-xs text-emerald-300">
+                <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>{resetSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleExecutePasswordReset} className="space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-300">
+                    New Temporary or Permanent Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleGeneratePassword}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-medium flex items-center gap-1"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>Generate Strong</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  placeholder="Enter or generate new password"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
+                  required
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Minimum 8 characters. The tenant owner can change this anytime after logging in.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetTenant(null);
+                    setResetPassword('');
+                    setResetError(null);
+                    setResetSuccess(null);
+                  }}
+                  disabled={resetSubmitting}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetSubmitting}
+                  className="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-amber-600/20 disabled:opacity-50"
+                >
+                  {resetSubmitting ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Updating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      <span>Set New Password</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

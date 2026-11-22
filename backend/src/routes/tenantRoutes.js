@@ -25,6 +25,7 @@ portalRouter.use(tenantSessionAuth);
 
 // Identity & Impersonation
 portalRouter.get('/me', tenantPortalController.getMe);
+portalRouter.post('/change-password', tenantPortalController.changePassword);
 portalRouter.post('/exit-impersonation', tenantPortalController.exitImpersonation);
 
 // Analytics & Branding

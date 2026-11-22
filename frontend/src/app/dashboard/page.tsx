@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
+import Link from 'next/link';
 import {
   Users,
   Smartphone,
@@ -14,6 +15,7 @@ import {
   ShieldCheck,
   AlertCircle,
   Check,
+  Lock,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 
@@ -154,11 +156,20 @@ export default function TenantOverviewPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">Tenant Overview</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Real-time metrics and authentication analytics for your workspace
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Tenant Overview</h1>
+          <p className="text-sm text-slate-400 mt-1">
+            Real-time metrics and authentication analytics for your workspace
+          </p>
+        </div>
+        <Link
+          href="/dashboard/security"
+          className="bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 font-medium py-2 px-3.5 rounded-xl text-xs transition-colors flex items-center gap-2 self-start sm:self-auto shadow-sm"
+        >
+          <Lock className="h-3.5 w-3.5 text-blue-400" />
+          <span>Security & Password</span>
+        </Link>
       </div>
 
       {/* Metric Cards */}

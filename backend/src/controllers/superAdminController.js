@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { query } from '../db/index.js';
 import { createMemberToken } from '../middleware/tenantSessionAuth.js';
-import { hashPassword } from '../services/cryptoService.js';
+import { hashPassword, verifyPassword } from '../services/cryptoService.js';
+import { logAuditEvent } from '../services/auditService.js';
 import { getRecentLogs, onLog, getLogStreamStats } from '../services/logBroadcaster.js';
 import { isRedisReady } from '../services/redisService.js';
 
@@ -278,5 +279,125 @@ export const superAdminController = {
       },
       stats: getLogStreamStats(),
     });
+  },
+
+  /**
+   * POST /api/super-admin/change-password
+   * Allows super admin to change their own password
+   */
+  async changePassword(req, res) {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password cannot be the same as your current password' });
+    }
+
+    try {
+      const memberRes = await query(
+        `SELECT id, email, password_hash FROM tenant_members WHERE id = $1 AND is_super_admin = true`,
+        [req.member.id]
+      );
+
+      if (memberRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Super Admin account not found' });
+      }
+
+      const admin = memberRes.rows[0];
+      const isCurrentValid = await verifyPassword(admin.password_hash, currentPassword);
+      if (!isCurrentValid) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+
+      const newPasswordHash = await hashPassword(newPassword);
+
+      await query(
+        `UPDATE tenant_members SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+        [newPasswordHash, admin.id]
+      );
+
+      await logAuditEvent({
+        tenantId: null,
+        userId: req.member.id,
+        event: 'SUPER_ADMIN_PASSWORD_CHANGED',
+        req,
+        metadata: { email: admin.email },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Super Admin password changed successfully',
+      });
+    } catch (err) {
+      console.error('[Super Admin Change Password Error]:', err);
+      return res.status(500).json({ error: 'Failed to change Super Admin password' });
+    }
+  },
+
+  /**
+   * POST /api/super-admin/tenants/:id/reset-password
+   * Allows super admin to reset/change a tenant's password
+   */
+  async resetTenantPassword(req, res) {
+    const { id: tenantId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+
+    try {
+      const tenantRes = await query(`SELECT id, name FROM tenants WHERE id = $1`, [tenantId]);
+      if (tenantRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Tenant not found' });
+      }
+      const tenant = tenantRes.rows[0];
+
+      const memberRes = await query(
+        `SELECT id, email FROM tenant_members WHERE tenant_id = $1 ORDER BY created_at ASC LIMIT 1`,
+        [tenantId]
+      );
+
+      if (memberRes.rows.length === 0) {
+        return res.status(404).json({ error: 'No member account found for this tenant organization' });
+      }
+
+      const targetMember = memberRes.rows[0];
+      const passwordHash = await hashPassword(newPassword);
+
+      await query(
+        `UPDATE tenant_members SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+        [passwordHash, targetMember.id]
+      );
+
+      await logAuditEvent({
+        tenantId,
+        userId: req.member.id,
+        event: 'SUPER_ADMIN_RESET_TENANT_PASSWORD',
+        req,
+        metadata: {
+          tenantId,
+          tenantName: tenant.name,
+          targetMemberEmail: targetMember.email,
+          resetBy: req.member.email,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: `Password updated successfully for ${targetMember.email}`,
+        targetEmail: targetMember.email,
+      });
+    } catch (err) {
+      console.error('[Reset Tenant Password Error]:', err);
+      return res.status(500).json({ error: 'Failed to reset tenant password' });
+    }
   },
 };

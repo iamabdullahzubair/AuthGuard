@@ -12,6 +12,8 @@ router.get('/stats', superAdminController.getStats);
 router.get('/tenants', superAdminController.listTenants);
 router.post('/tenants', superAdminController.createTenant);
 router.patch('/tenants/:id', superAdminController.updateTenant);
+router.post('/tenants/:id/reset-password', superAdminController.resetTenantPassword);
+router.post('/change-password', superAdminController.changePassword);
 router.post('/impersonate/:tenantId', superAdminController.impersonateTenant);
 
 // Telemetry & Live Log Streams

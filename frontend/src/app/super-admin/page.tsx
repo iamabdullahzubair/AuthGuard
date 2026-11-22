@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Crown, Building, Users, Smartphone, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
+import { Crown, Building, Users, Smartphone, ShieldCheck, ArrowRight, Loader2, Lock } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 
 export default function SuperAdminOverviewPage() {
@@ -122,13 +122,22 @@ export default function SuperAdminOverviewPage() {
             </p>
           </div>
 
-          <Link
-            href="/super-admin/tenants"
-            className="w-full bg-slate-800 hover:bg-slate-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs transition-colors flex items-center justify-center gap-2"
-          >
-            <Building className="h-4 w-4" />
-            <span>Open Tenants Directory</span>
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/super-admin/tenants"
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs transition-colors flex items-center justify-center gap-2"
+            >
+              <Building className="h-4 w-4" />
+              <span>Tenants Directory</span>
+            </Link>
+            <Link
+              href="/super-admin/security"
+              className="flex-1 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-600/40 font-medium py-2.5 px-4 rounded-xl text-xs transition-colors flex items-center justify-center gap-2"
+            >
+              <Lock className="h-4 w-4" />
+              <span>Security & Password</span>
+            </Link>
+          </div>
         </div>
       </div>
     </div>

@@ -15,14 +15,18 @@ import {
   LogOut,
   Building,
   Terminal,
+  Lock,
+  KeyRound,
 } from 'lucide-react';
 import { getStoredMember, getStoredTenant, clearStoredAuth, Member, Tenant } from '@/lib/api';
+import ChangePasswordModal from '@/components/ChangePasswordModal';
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [member, setMember] = useState<Member | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   useEffect(() => {
     setMember(getStoredMember());
@@ -42,6 +46,7 @@ export default function Sidebar() {
     { name: 'Webhooks', href: '/dashboard/webhooks', icon: Webhook },
     { name: 'Enrolled Users', href: '/dashboard/users', icon: Users },
     { name: 'Branding', href: '/dashboard/branding', icon: Palette },
+    { name: 'Security & Password', href: '/dashboard/security', icon: Lock },
     { name: 'SDK & Docs', href: '/dashboard/docs', icon: FileCode },
   ];
 
@@ -49,6 +54,7 @@ export default function Sidebar() {
     { name: 'Platform Overview', href: '/super-admin', icon: Crown },
     { name: 'All Tenants', href: '/super-admin/tenants', icon: Building },
     { name: 'Live Logs', href: '/super-admin/logs', icon: Terminal },
+    { name: 'Security & Password', href: '/super-admin/security', icon: Lock },
   ];
 
   const currentNav = isSuperAdminView ? superAdminNav : tenantNav;
@@ -121,15 +127,31 @@ export default function Sidebar() {
               )}
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            title="Log out"
-            className="p-1.5 rounded-md text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              title="Change Password"
+              className="p-1.5 rounded-md text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors"
+            >
+              <KeyRound className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleLogout}
+              title="Log out"
+              className="p-1.5 rounded-md text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
+
+      <ChangePasswordModal
+        isOpen={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        userEmail={member?.email}
+        isSuperAdmin={member?.isSuperAdmin}
+      />
     </aside>
   );
 }

@@ -7,7 +7,13 @@ import { generateTotpSecret, generateQrCodeDataUrl } from '../services/totpServi
 import { deliverToWebhook } from '../services/tenantWebhookService.js';
 import { storeEnrollToken } from '../services/redisService.js';
 import { createMemberToken } from '../middleware/tenantSessionAuth.js';
+import { logAuditEvent } from '../services/auditService.js';
 import { config } from '../config/index.js';
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(8, 'New password must be at least 8 characters'),
+});
 
 const registerSchema = z.object({
   email: z.string().email('Valid email required'),
@@ -232,6 +238,67 @@ export const tenantPortalController = {
       },
       tenant: null,
     });
+  },
+
+  /**
+   * POST /api/tenant/change-password
+   * Allows tenant member or super admin to change their own password
+   */
+  async changePassword(req, res) {
+    const parseResult = changePasswordSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: parseResult.error.errors[0].message });
+    }
+
+    const { currentPassword, newPassword } = parseResult.data;
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password cannot be the same as your current password' });
+    }
+
+    try {
+      const memberRes = await query(
+        `SELECT id, email, password_hash, is_super_admin, tenant_id FROM tenant_members WHERE id = $1`,
+        [req.member.id]
+      );
+
+      if (memberRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+
+      const member = memberRes.rows[0];
+
+      const isCurrentValid = await verifyPassword(member.password_hash, currentPassword);
+      if (!isCurrentValid) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+
+      const newPasswordHash = await hashPassword(newPassword);
+
+      await query(
+        `UPDATE tenant_members SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+        [newPasswordHash, member.id]
+      );
+
+      await logAuditEvent({
+        tenantId: member.tenant_id || req.tenant?.id || null,
+        userId: member.id,
+        event: 'MEMBER_PASSWORD_CHANGED',
+        req,
+        metadata: {
+          email: member.email,
+          isSuperAdmin: Boolean(member.is_super_admin),
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Password changed successfully',
+      });
+    } catch (err) {
+      console.error('[Change Password Error]:', err);
+      return res.status(500).json({ error: 'Failed to change password. Please try again.' });
+    }
   },
 
   /**
