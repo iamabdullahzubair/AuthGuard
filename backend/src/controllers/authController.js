@@ -18,13 +18,13 @@ const respondSchema = z.object({
   request_id: z.string().optional(),
   challenge_id: z.string().optional(),
   challengeId: z.string().optional(),
-  chosen_number: z.number().int().optional().default(0),
-  chosen_word: z.string().optional(),
-  typed_word: z.string().optional(),
+  chosen_number: z.union([z.number(), z.string()]).transform((v) => Number(v) || 0).optional().default(0),
+  chosen_word: z.string().nullable().optional(),
+  typed_word: z.string().nullable().optional(),
   decision: z.enum(['approve', 'deny']),
-  timestamp: z.number().int(),
+  timestamp: z.union([z.number(), z.string()]).transform((v) => Number(v)),
   signature: z.string().min(10),
-  device_id: z.string().optional(),
+  device_id: z.string().nullable().optional(),
 }).refine((data) => data.request_id || data.challenge_id || data.challengeId, {
   message: 'challenge_id or request_id required',
 });
