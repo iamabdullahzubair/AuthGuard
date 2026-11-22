@@ -1,0 +1,14 @@
+node_modules
+*/node_modules
+.next
+frontend/.next
+frontend/out
+.git
+.github
+*.log
+logs
+backend/logs
+pgdata
+redisdata
+dist
+coverage

@@ -22,8 +22,8 @@ fi
 # Step 4: Build & Launch all containers (postgres, redis, app, nginx, certbot)
 echo "⚡ Building & launching application containers..."
 docker compose up -d postgres redis
-docker compose up -d --build app
-docker compose up -d nginx certbot
+docker compose up -d --build app nginx
+docker compose up -d certbot
 
 # Step 5: Detect Active Dynamic Public IP & nip.io Domain
 echo "🔍 Detecting active AWS Public IP..."
