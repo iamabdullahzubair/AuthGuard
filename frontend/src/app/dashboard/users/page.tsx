@@ -146,7 +146,7 @@ export default function UsersPage() {
     setPushStatus((prev) => ({ ...prev, [email]: 'Sending push...' }));
 
     try {
-      const res = await apiClient('/api/v1/push/challenge', {
+      const res = await apiClient('/api/tenant/test-push', {
         method: 'POST',
         body: JSON.stringify({ email }),
       });
@@ -168,7 +168,7 @@ export default function UsersPage() {
         }
 
         try {
-          const s = await apiClient(`/api/v1/push/status/${res.requestId}`);
+          const s = await apiClient(`/api/tenant/push/status/${res.requestId}`);
           if (s.status === 'approved') {
             clearInterval(timer);
             setPushStatus((prev) => ({ ...prev, [email]: '✓ Approved!' }));
