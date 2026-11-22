@@ -52,16 +52,30 @@ jobs:
           echo "🔍 Verifying live server health..."
           DOMAIN="${{ secrets.EC2_HOST }}.nip.io"
           
-          # Wait 5 seconds for containers to stabilize
-          sleep 5
+          # Retry loop: Check health up to 6 times (30 seconds total)
+          MAX_RETRIES=6
+          RETRY_COUNT=0
+          SUCCESS=0
           
-          # Test /api/health endpoint
-          HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health")
-          echo "HTTP Response Status: $HTTP_STATUS"
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Attempt $RETRY_COUNT of $MAX_RETRIES: Checking https://${DOMAIN}/api/health..."
+            
+            HTTP_STATUS=$(curl -k -s -L -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health" || echo "000")
+            echo "Response Status Code: $HTTP_STATUS"
+            
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ HEALTH CHECK PASSED! Backend API is live and returning 200 OK."
+              SUCCESS=1
+              break
+            fi
+            
+            echo "⏳ Containers still stabilizing, retrying in 5 seconds..."
+            sleep 5
+          done
           
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ HEALTH CHECK PASSED! Backend API is live and healthy."
-          else
-            echo "❌ HEALTH CHECK FAILED! Expected 200 OK, got: $HTTP_STATUS"
+          if [ $SUCCESS -ne 1 ]; then
+            echo "❌ HEALTH CHECK FAILED after $MAX_RETRIES attempts!"
+            curl -k -i "https://${DOMAIN}/api/health" || true
             exit 1
           fi

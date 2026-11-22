@@ -141,13 +141,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Central API Router (All modular routes aggregated under /api)
-app.use('/api', apiRoutes);
-
-// Health check endpoint
+// Health check endpoint (Mounted before apiRoutes so wildcard /:id does not intercept it)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Central API Router (All modular routes aggregated under /api)
+app.use('/api', apiRoutes);
 
 // Centralized 404 handler for unknown API routes
 app.use('/api', (req, res) => {
