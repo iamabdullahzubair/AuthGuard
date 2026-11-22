@@ -17,12 +17,9 @@ router.use('/tenant', tenantRoutes);
 // 3. Authenticator Core (/api/auth)
 router.use('/auth', authRoutes);
 
-// Aliases for Authenticator PWA client convenience
-router.get('/vapid-public-key', (req, res, next) => {
-  req.url = '/vapid-public-key';
-  authRoutes(req, res, next);
-});
+// Direct shortcuts for PWA convenience (/api/enroll/complete, /api/challenge/*, /api/vapid-public-key)
 router.use('/enroll', authRoutes);
 router.use('/challenge', authRoutes);
+router.use('/', authRoutes);
 
 export default router;
