@@ -151,9 +151,18 @@ export default function UsersPage() {
         body: JSON.stringify({ email }),
       });
 
+      let statusMsg = 'Pending...';
+      if (res.challengeWord) {
+        statusMsg = `Match Word: "${res.challengeWord}" (Pending...)`;
+      } else if (res.challengeNumber !== undefined && res.challengeNumber !== null) {
+        statusMsg = `Matching #: ${res.challengeNumber} (Pending...)`;
+      } else if (res.mode === 'one_click') {
+        statusMsg = '1-Tap Approval (Pending...)';
+      }
+
       setPushStatus((prev) => ({
         ...prev,
-        [email]: `Matching #: ${res.challengeNumber} (Pending...)`,
+        [email]: statusMsg,
       }));
 
       // Poll push resolution (3s interval, max 25 attempts / 75 seconds)
