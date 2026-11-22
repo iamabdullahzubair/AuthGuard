@@ -146,14 +146,23 @@ export default function UsersPage() {
     setPushStatus((prev) => ({ ...prev, [email]: 'Sending push...' }));
 
     try {
-      const res = await apiClient('/api/v1/push/challenge', {
+      const res = await apiClient('/api/tenant/test-push', {
         method: 'POST',
         body: JSON.stringify({ email }),
       });
 
+      let statusMsg = 'Pending...';
+      if (res.challengeWord) {
+        statusMsg = `Match Word: "${res.challengeWord}" (Pending...)`;
+      } else if (res.challengeNumber !== undefined && res.challengeNumber !== null) {
+        statusMsg = `Matching #: ${res.challengeNumber} (Pending...)`;
+      } else if (res.mode === 'one_click') {
+        statusMsg = '1-Tap Approval (Pending...)';
+      }
+
       setPushStatus((prev) => ({
         ...prev,
-        [email]: `Matching #: ${res.challengeNumber} (Pending...)`,
+        [email]: statusMsg,
       }));
 
       // Poll push resolution (3s interval, max 25 attempts / 75 seconds)
@@ -168,7 +177,7 @@ export default function UsersPage() {
         }
 
         try {
-          const s = await apiClient(`/api/v1/push/status/${res.requestId}`);
+          const s = await apiClient(`/api/tenant/push/status/${res.requestId}`);
           if (s.status === 'approved') {
             clearInterval(timer);
             setPushStatus((prev) => ({ ...prev, [email]: '✓ Approved!' }));

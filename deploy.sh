@@ -11,7 +11,8 @@ git checkout deploy.sh init-letsencrypt.sh 2>/dev/null || true
 
 # Step 2: Pull latest code & pre-compiled static assets
 echo "📥 Pulling latest code from GitHub..."
-git pull origin main
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "prod")
+git pull origin "$BRANCH"
 
 # Step 3: Ensure .env exists
 if [ ! -f .env ]; then
