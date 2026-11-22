@@ -25,13 +25,18 @@ jobs:
             echo "========================================================"
             
             # 1. Locate project directory on EC2
-            if [ -d "$HOME/webPushNotification" ]; then
-              cd "$HOME/webPushNotification"
-            elif [ -d "$HOME/AuthGuard" ]; then
+            if [ -d "$HOME/AuthGuard" ]; then
               cd "$HOME/AuthGuard"
+            elif [ -f "./deploy.sh" ]; then
+              true
             else
-              echo "❌ Error: Could not find project directory in $HOME!"
-              exit 1
+              FOUND_DIR=$(find "$HOME" -maxdepth 2 -name "deploy.sh" -exec dirname {} \; 2>/dev/null | head -n 1)
+              if [ -n "$FOUND_DIR" ]; then
+                cd "$FOUND_DIR"
+              else
+                echo "❌ Error: Could not find project directory with deploy.sh in $HOME!"
+                exit 1
+              fi
             fi
             
             echo "📍 Deploying in directory: $(pwd)"
