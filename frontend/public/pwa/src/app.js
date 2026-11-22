@@ -628,7 +628,7 @@ async function respondToLogin(requestId, chosenNumber, decision, chosenWord = nu
         challengeId: requestId,
         request_id: requestId,
         chosen_number: Number(chosenNumber || 0),
-        chosen_word: chosenWord,
+        chosen_word: chosenWord || undefined,
         decision,
         timestamp,
         signature,
