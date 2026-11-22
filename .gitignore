@@ -1,8 +1,8 @@
 node_modules/
 .env
 *.log
-logs/
-backend/logs/
+/logs/
+/backend/logs/
 .DS_Store
 dist/
 pgdata/
