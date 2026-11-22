@@ -187,7 +187,7 @@ export default function TenantOverviewPage() {
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
-            <span>2FA Push Challenges</span>
+            <span>MFA Push Challenges</span>
             <CheckCircle2 className="h-4 w-4 text-indigo-400" />
           </div>
           <div className="mt-3 text-2xl font-bold text-white tracking-tight">
