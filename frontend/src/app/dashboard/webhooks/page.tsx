@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Webhook,
   Plus,
@@ -21,6 +21,10 @@ import {
   Shield,
   RefreshCw,
   ExternalLink,
+  Pencil,
+  Eye,
+  Power,
+  Filter,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import ConfirmModal from '@/components/ConfirmModal';
@@ -94,19 +98,43 @@ export default function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [showPayloadRef, setShowPayloadRef] = useState(false);
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+
+  // Notification Banner
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [copiedSecretId, setCopiedSecretId] = useState<string | null>(null);
 
-  // New Webhook Form State
-  const [url, setUrl] = useState('');
-  const [selectedEvents, setSelectedEvents] = useState<string[]>(['login.approved', 'login.denied']);
-  const [customHeaders, setCustomHeaders] = useState<{ key: string; value: string }[]>([
-    { key: 'Authorization', value: 'Bearer client_secret_token' },
-  ]);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  // Register Modal State
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [registerUrl, setRegisterUrl] = useState('');
+  const [registerEvents, setRegisterEvents] = useState<string[]>(['login.approved', 'login.denied']);
+  const [showRegisterHeaders, setShowRegisterHeaders] = useState(false);
+  const [registerHeaders, setRegisterHeaders] = useState<{ key: string; value: string }[]>([]);
+  const [submittingRegister, setSubmittingRegister] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+
+  // Edit Modal State
+  const [editingWebhook, setEditingWebhook] = useState<any | null>(null);
+  const [editUrl, setEditUrl] = useState('');
+  const [editEvents, setEditEvents] = useState<string[]>([]);
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [editHeaders, setEditHeaders] = useState<{ key: string; value: string }[]>([]);
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Toggle Active State Loading
+  const [togglingWebhookId, setTogglingWebhookId] = useState<string | null>(null);
+
+  // Delivery Inspection Modal State
+  const [selectedDelivery, setSelectedDelivery] = useState<any | null>(null);
+  const [deliveryActiveTab, setDeliveryActiveTab] = useState<'response' | 'payload' | 'headers'>('response');
+  const [retryingDeliveryId, setRetryingDeliveryId] = useState<string | null>(null);
+  const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'success' | 'failed'>('all');
+
+  // Payload Doc Accordion
+  const [showPayloadRef, setShowPayloadRef] = useState(false);
 
   // Playground State
   const [playgroundHookId, setPlaygroundHookId] = useState<string>('');
@@ -126,7 +154,7 @@ export default function WebhooksPage() {
   } | null>(null);
   const [playgroundActiveTab, setPlaygroundActiveTab] = useState<'response' | 'payload' | 'headers'>('response');
 
-  // Confirm Modal State
+  // Delete Modal State
   const [deleteModalState, setDeleteModalState] = useState<{
     isOpen: boolean;
     hookId: string;
@@ -134,12 +162,14 @@ export default function WebhooksPage() {
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const fetchWebhooks = async () => {
+  const fetchWebhooks = async (isBackground = false) => {
+    if (!isBackground) setRefreshing(true);
     try {
       const data = await apiClient('/api/tenant/webhooks');
       const list = data.webhooks || [];
       setWebhooks(list);
       setDeliveries(data.deliveries || []);
+      setLastRefreshedAt(new Date());
 
       // Pre-select first webhook if none selected in playground
       if (list.length > 0 && !playgroundHookId) {
@@ -147,9 +177,12 @@ export default function WebhooksPage() {
       }
     } catch (err: any) {
       console.error(err);
-      setErrorBanner(err.message || 'Failed to fetch webhooks');
+      if (!isBackground) {
+        setNotification({ type: 'error', message: err.message || 'Failed to fetch webhooks' });
+      }
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -157,45 +190,129 @@ export default function WebhooksPage() {
     fetchWebhooks();
   }, []);
 
+  // Auto-refresh interval (every 5 seconds when toggled on)
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchWebhooks(true);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [autoRefresh]);
+
   const handleCopySecret = (hookId: string, secret: string) => {
     navigator.clipboard.writeText(secret);
     setCopiedSecretId(hookId);
     setTimeout(() => setCopiedSecretId(null), 2000);
   };
 
-  const handleToggleEvent = (eventId: string) => {
-    setSelectedEvents((prev) =>
-      prev.includes(eventId) ? prev.filter((e) => e !== eventId) : [...prev, eventId]
+  // Toggle Active/Inactive
+  const handleToggleActive = async (hook: any) => {
+    setTogglingWebhookId(hook.id);
+    const newStatus = !hook.is_active;
+
+    // Optimistic update
+    setWebhooks((prev) =>
+      prev.map((w) => (w.id === hook.id ? { ...w, is_active: newStatus } : w))
     );
+
+    try {
+      await apiClient(`/api/tenant/webhooks/${hook.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active: newStatus }),
+      });
+      setNotification({
+        type: 'success',
+        message: `Webhook ${newStatus ? 'activated' : 'paused'} successfully.`,
+      });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err: any) {
+      // Revert optimistic update
+      setWebhooks((prev) =>
+        prev.map((w) => (w.id === hook.id ? { ...w, is_active: hook.is_active } : w))
+      );
+      setNotification({
+        type: 'error',
+        message: err.message || 'Failed to update webhook status',
+      });
+    } finally {
+      setTogglingWebhookId(null);
+    }
   };
 
-  const handleAddHeader = () => {
-    setCustomHeaders([...customHeaders, { key: '', value: '' }]);
+  // Open Edit Modal
+  const openEditModal = (hook: any) => {
+    setEditingWebhook(hook);
+    setEditUrl(hook.url);
+    const hookEvents = Array.isArray(hook.events)
+      ? hook.events
+      : typeof hook.events === 'string'
+      ? JSON.parse(hook.events)
+      : [];
+    setEditEvents(hookEvents);
+    setEditIsActive(hook.is_active ?? true);
+
+    const rawHeaders = typeof hook.custom_headers === 'string'
+      ? JSON.parse(hook.custom_headers)
+      : hook.custom_headers || {};
+    const headerArr = Object.entries(rawHeaders).map(([k, v]) => ({ key: k, value: String(v) }));
+    setEditHeaders(headerArr);
+    setEditError(null);
   };
 
-  const handleRemoveHeader = (idx: number) => {
-    setCustomHeaders(customHeaders.filter((_, i) => i !== idx));
-  };
-
-  const handleHeaderChange = (idx: number, field: 'key' | 'value', val: string) => {
-    const updated = [...customHeaders];
-    updated[idx][field] = val;
-    setCustomHeaders(updated);
-  };
-
-  const handleCreateWebhook = async (e: React.FormEvent) => {
+  const handleUpdateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFormError(null);
+    if (!editingWebhook) return;
+    setEditError(null);
 
-    if (selectedEvents.length === 0) {
-      setFormError('Please select at least one event subscription for this webhook.');
+    if (editEvents.length === 0) {
+      setEditError('Please select at least one event subscription.');
       return;
     }
 
-    setSubmitting(true);
+    setSubmittingEdit(true);
     try {
       const headersObj: Record<string, string> = {};
-      customHeaders.forEach((h) => {
+      editHeaders.forEach((h) => {
+        if (h.key.trim()) {
+          headersObj[h.key.trim()] = h.value.trim();
+        }
+      });
+
+      await apiClient(`/api/tenant/webhooks/${editingWebhook.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          url: editUrl.trim(),
+          events: editEvents,
+          customHeaders: headersObj,
+          is_active: editIsActive,
+        }),
+      });
+
+      setNotification({ type: 'success', message: 'Webhook updated successfully!' });
+      setTimeout(() => setNotification(null), 3000);
+      setEditingWebhook(null);
+      fetchWebhooks();
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update webhook');
+    } finally {
+      setSubmittingEdit(false);
+    }
+  };
+
+  // Register Webhook
+  const handleCreateWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegisterError(null);
+
+    if (registerEvents.length === 0) {
+      setRegisterError('Please select at least one event subscription for this webhook.');
+      return;
+    }
+
+    setSubmittingRegister(true);
+    try {
+      const headersObj: Record<string, string> = {};
+      registerHeaders.forEach((h) => {
         if (h.key.trim()) {
           headersObj[h.key.trim()] = h.value.trim();
         }
@@ -204,27 +321,33 @@ export default function WebhooksPage() {
       const res = await apiClient('/api/tenant/webhooks', {
         method: 'POST',
         body: JSON.stringify({
-          url,
+          url: registerUrl.trim(),
           customHeaders: headersObj,
-          events: selectedEvents,
+          events: registerEvents,
         }),
       });
 
-      setUrl('');
-      setCustomHeaders([{ key: '', value: '' }]);
-      setSelectedEvents(['login.approved', 'login.denied']);
-      setShowModal(false);
+      setRegisterUrl('');
+      setRegisterHeaders([]);
+      setRegisterEvents(['login.approved', 'login.denied']);
+      setShowRegisterModal(false);
+      setShowRegisterHeaders(false);
+
+      setNotification({ type: 'success', message: 'Webhook registered and active!' });
+      setTimeout(() => setNotification(null), 3000);
+
       if (res.webhook?.id) {
         setPlaygroundHookId(res.webhook.id);
       }
       fetchWebhooks();
     } catch (err: any) {
-      setFormError(err.message || 'Failed to register webhook');
+      setRegisterError(err.message || 'Failed to register webhook');
     } finally {
-      setSubmitting(false);
+      setSubmittingRegister(false);
     }
   };
 
+  // Delete Webhook
   const openDeleteModal = (hookId: string, hookUrl: string) => {
     setDeleteModalState({
       isOpen: true,
@@ -243,11 +366,49 @@ export default function WebhooksPage() {
       if (playgroundHookId === deleteModalState.hookId) {
         setPlaygroundHookId('');
       }
+      setNotification({ type: 'success', message: 'Webhook deleted successfully.' });
+      setTimeout(() => setNotification(null), 3000);
       fetchWebhooks();
     } catch (err: any) {
-      setErrorBanner(err.message || 'Failed to delete webhook');
+      setNotification({ type: 'error', message: err.message || 'Failed to delete webhook' });
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // Retry / Redeliver a past delivery log
+  const handleRetryDelivery = async (deliveryId: string) => {
+    setRetryingDeliveryId(deliveryId);
+    try {
+      const res = await apiClient(`/api/tenant/webhooks/deliveries/${deliveryId}/retry`, {
+        method: 'POST',
+      });
+      setNotification({
+        type: res.result?.success ? 'success' : 'error',
+        message: res.result?.success
+          ? `Webhook re-delivered successfully! HTTP ${res.result.status}`
+          : `Re-delivery completed with error: ${res.result?.responseBody || `HTTP ${res.result?.status}`}`,
+      });
+      setTimeout(() => setNotification(null), 5000);
+      await fetchWebhooks(true);
+
+      // If inspection modal is open for this delivery, update it with fresh result
+      if (selectedDelivery && selectedDelivery.id === deliveryId) {
+        setSelectedDelivery((prev: any) => ({
+          ...prev,
+          response_status: res.result?.status,
+          response_body: res.result?.responseBody,
+          duration_ms: res.result?.durationMs,
+          success: res.result?.success,
+        }));
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err.message || 'Failed to re-dispatch webhook',
+      });
+    } finally {
+      setRetryingDeliveryId(null);
     }
   };
 
@@ -260,7 +421,7 @@ export default function WebhooksPage() {
   // Run live hit from playground
   const handleExecutePlayground = async () => {
     if (!playgroundHookId) {
-      setErrorBanner('Please select a target webhook to test.');
+      setNotification({ type: 'error', message: 'Please select a target webhook to test.' });
       return;
     }
 
@@ -293,7 +454,7 @@ export default function WebhooksPage() {
       });
 
       // Refresh recent deliveries history table
-      fetchWebhooks();
+      fetchWebhooks(true);
     } catch (err: any) {
       setPlaygroundResult({
         success: false,
@@ -311,6 +472,13 @@ export default function WebhooksPage() {
 
   const activeWebhookObj = webhooks.find((w) => w.id === playgroundHookId);
 
+  // Filtered deliveries
+  const filteredDeliveries = deliveries.filter((d) => {
+    if (deliveryFilter === 'success') return d.success === true;
+    if (deliveryFilter === 'failed') return d.success === false;
+    return true;
+  });
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -318,53 +486,117 @@ export default function WebhooksPage() {
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Webhooks & Event Streams</h1>
           <p className="text-sm text-slate-400 mt-1">
-            HMAC-SHA256 signed event streams. Webhooks strictly fire only for events you explicitly select.
+            Real-time HMAC-SHA256 signed event notifications. Inspect dispatches, responses, and manage endpoints.
           </p>
         </div>
-        <button
-          onClick={() => {
-            setFormError(null);
-            setShowModal(true);
-          }}
-          className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20 shrink-0"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Register Webhook</span>
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Auto Refresh Toggle */}
+          <button
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all ${
+              autoRefresh
+                ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700 shadow-sm'
+                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+            }`}
+            title="Auto-refresh delivery logs every 5 seconds"
+          >
+            <span className={`h-2 w-2 rounded-full ${autoRefresh ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+            <span>Auto-refresh {autoRefresh ? 'ON' : 'OFF'}</span>
+          </button>
+
+          {/* Manual Refresh Button */}
+          <button
+            onClick={() => fetchWebhooks()}
+            disabled={refreshing}
+            className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs transition-colors flex items-center justify-center disabled:opacity-50"
+            title="Refresh Webhooks & Deliveries"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
+          </button>
+
+          <button
+            onClick={() => {
+              setRegisterError(null);
+              setRegisterUrl('');
+              setRegisterEvents(['login.approved', 'login.denied']);
+              setRegisterHeaders([]);
+              setShowRegisterHeaders(false);
+              setShowRegisterModal(true);
+            }}
+            className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20 shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Register Webhook</span>
+          </button>
+        </div>
       </div>
 
-      {errorBanner && (
-        <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-300">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-            <span>{errorBanner}</span>
+      {/* Global Notification Banner */}
+      {notification && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-center justify-between text-xs transition-all ${
+            notification.type === 'success'
+              ? 'bg-emerald-950/70 border-emerald-800 text-emerald-200'
+              : 'bg-red-950/70 border-red-800 text-red-200'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {notification.type === 'success' ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+            )}
+            <span className="font-medium">{notification.message}</span>
           </div>
           <button
-            onClick={() => setErrorBanner(null)}
-            className="text-red-400 hover:text-red-200 text-xs font-semibold px-2 py-0.5 rounded"
+            onClick={() => setNotification(null)}
+            className="text-slate-400 hover:text-white font-semibold px-2 py-0.5 rounded text-xs"
           >
-            Dismiss
+            ✕
           </button>
         </div>
       )}
 
-      {/* Configured Webhooks List */}
+      {/* =============================================================== */}
+      {/* 1. CONFIGURED WEBHOOK ENDPOINTS */}
+      {/* =============================================================== */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Webhook className="h-4 w-4 text-emerald-400" />
-            <span>Configured Endpoints</span>
+            <span>Configured Endpoints ({webhooks.length})</span>
           </div>
-          <span className="text-[11px] text-slate-500 font-normal">Active: {webhooks.length}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] text-emerald-400 font-medium">
+              Active: {webhooks.filter((w) => w.is_active).length}
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">
+              Paused: {webhooks.filter((w) => !w.is_active).length}
+            </span>
+          </div>
         </div>
 
         {loading ? (
-          <div className="p-8 text-center">
+          <div className="p-12 text-center">
             <Loader2 className="h-6 w-6 text-blue-500 animate-spin mx-auto" />
+            <p className="text-xs text-slate-500 mt-2">Loading configured endpoints...</p>
           </div>
         ) : webhooks.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-sm">
-            No webhooks configured yet. Click <strong className="text-slate-300">Register Webhook</strong> to connect your backend callback URL.
+          <div className="p-10 text-center space-y-3">
+            <div className="h-10 w-10 rounded-full bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
+              <Webhook className="h-5 w-5" />
+            </div>
+            <div className="text-sm font-semibold text-white">No webhooks registered yet</div>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              Add your server endpoint to receive instant notifications when users approve or deny 2FA logins.
+            </p>
+            <button
+              onClick={() => setShowRegisterModal(true)}
+              className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors inline-flex items-center gap-2 shadow-md shadow-blue-600/20"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Register First Webhook</span>
+            </button>
           </div>
         ) : (
           <div className="divide-y divide-slate-800">
@@ -376,22 +608,42 @@ export default function WebhooksPage() {
                 : typeof h.events === 'string'
                 ? JSON.parse(h.events)
                 : [];
+              const isActive = h.is_active !== false;
 
               return (
-                <div key={h.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                <div
+                  key={h.id}
+                  className={`p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+                    isActive ? 'hover:bg-slate-850/30' : 'bg-slate-950/40 opacity-75'
+                  }`}
+                >
+                  <div className="space-y-2.5 flex-1 min-w-0">
+                    {/* URL and Status Badges */}
+                    <div className="flex items-center gap-2.5 flex-wrap">
                       <span className="font-mono text-xs font-bold text-white bg-slate-950 px-3 py-1 rounded-lg border border-slate-800 truncate max-w-lg">
                         {h.url}
                       </span>
-                      <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-semibold">
+
+                      {/* Active/Inactive Badge */}
+                      <span
+                        className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1.5 border ${
+                          isActive
+                            ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                            : 'bg-amber-950/70 text-amber-400 border-amber-800'
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                        <span>{isActive ? 'Active' : 'Paused'}</span>
+                      </span>
+
+                      <span className="text-[10px] bg-slate-950 text-slate-400 border border-slate-800 px-2 py-0.5 rounded-full font-mono">
                         HMAC-SHA256
                       </span>
                     </div>
 
                     {/* Subscribed Events Badges */}
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[11px] text-slate-500 font-medium mr-1">Subscribed Events:</span>
+                      <span className="text-[11px] text-slate-500 font-medium mr-1">Events:</span>
                       {hookEvents.length > 0 ? (
                         hookEvents.map((evt) => {
                           const meta = AVAILABLE_EVENTS.find((e) => e.id === evt);
@@ -411,11 +663,12 @@ export default function WebhooksPage() {
                       )}
                     </div>
 
+                    {/* Secret & Custom Headers metadata */}
                     <div className="text-slate-400 font-mono text-[11px] flex items-center gap-4 flex-wrap pt-0.5">
                       <div className="flex items-center gap-1.5">
-                        <span>Secret:</span>
+                        <span className="text-slate-500">Signing Secret:</span>
                         <code className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
-                          {h.secret.slice(0, 10)}...
+                          {h.secret.slice(0, 8)}••••••••
                         </code>
                         <button
                           onClick={() => handleCopySecret(h.id, h.secret)}
@@ -423,25 +676,49 @@ export default function WebhooksPage() {
                           title="Copy Full HMAC Secret"
                         >
                           {copiedSecretId === h.id ? (
-                            <Check className="h-3 w-3 text-emerald-400" />
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
                           ) : (
-                            <Copy className="h-3 w-3" />
+                            <Copy className="h-3.5 w-3.5" />
                           )}
                         </button>
                       </div>
 
-                      <span>
-                        Custom Headers:{' '}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-500">Headers:</span>
                         {headerKeys.length > 0 ? (
                           <span className="text-blue-400 font-semibold">{headerKeys.join(', ')}</span>
                         ) : (
                           <span className="text-slate-600">None</span>
                         )}
-                      </span>
+                      </div>
+
+                      {h.updated_at && (
+                        <span className="text-slate-600 text-[10px]">
+                          Updated {new Date(h.updated_at).toLocaleDateString()}
+                        </span>
+                      )}
                     </div>
                   </div>
 
+                  {/* Actions & Active Toggle */}
                   <div className="flex items-center gap-2 shrink-0">
+                    {/* Active/Inactive Toggle Switch */}
+                    <button
+                      onClick={() => handleToggleActive(h)}
+                      disabled={togglingWebhookId === h.id}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        isActive ? 'bg-emerald-600' : 'bg-slate-800'
+                      } ${togglingWebhookId === h.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={isActive ? 'Click to Pause Webhook' : 'Click to Activate Webhook'}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          isActive ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+
+                    {/* Test in Playground */}
                     <button
                       onClick={() => {
                         setPlaygroundHookId(h.id);
@@ -451,17 +728,28 @@ export default function WebhooksPage() {
                         }
                       }}
                       className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-600/40 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      title="Test in Interactive Playground"
                     >
                       <Play className="h-3 w-3 fill-current" />
-                      <span>Playground</span>
+                      <span>Test</span>
                     </button>
 
+                    {/* Edit Webhook Button */}
+                    <button
+                      onClick={() => openEditModal(h)}
+                      className="p-2 rounded-xl text-slate-400 hover:text-blue-400 hover:bg-blue-950/30 transition-colors border border-transparent hover:border-blue-900"
+                      title="Edit Webhook URL, Events & Headers"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+
+                    {/* Delete Button */}
                     <button
                       onClick={() => openDeleteModal(h.id, h.url)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
+                      className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors border border-transparent hover:border-red-900"
                       title="Delete Webhook"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
@@ -472,7 +760,145 @@ export default function WebhooksPage() {
       </div>
 
       {/* =============================================================== */}
-      {/* LIVE WEBHOOK PLAYGROUND (REAL-TIME HIT & DIAGNOSTICS) */}
+      {/* 2. RECENT WEBHOOK DELIVERIES & LIVE INSPECTOR */}
+      {/* =============================================================== */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-blue-400" />
+            <h2 className="text-xs font-bold text-white uppercase tracking-wider">
+              Webhook Delivery Logs & Inspection
+            </h2>
+            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">
+              {filteredDeliveries.length}
+            </span>
+          </div>
+
+          {/* Filter Pills */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-800 text-[11px]">
+              <button
+                onClick={() => setDeliveryFilter('all')}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                  deliveryFilter === 'all'
+                    ? 'bg-slate-800 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setDeliveryFilter('success')}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                  deliveryFilter === 'success'
+                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Success (2xx)
+              </button>
+              <button
+                onClick={() => setDeliveryFilter('failed')}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                  deliveryFilter === 'failed'
+                    ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Failed
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {deliveries.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-xs space-y-2">
+            <p>No webhook dispatches recorded yet.</p>
+            <p className="text-slate-600 text-[11px]">
+              Whenever a user approves/denies 2FA on their phone, or when you run a simulation in the Playground below, the delivery log and response body will appear here.
+            </p>
+          </div>
+        ) : filteredDeliveries.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-xs">
+            No deliveries match the &quot;{deliveryFilter}&quot; filter.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-800 font-mono text-xs">
+            {filteredDeliveries.map((d) => (
+              <div
+                key={d.id}
+                onClick={() => {
+                  setSelectedDelivery(d);
+                  setDeliveryActiveTab('response');
+                }}
+                className="p-3.5 flex items-center justify-between hover:bg-slate-850/60 cursor-pointer transition-colors flex-wrap gap-2 group"
+                title="Click to inspect full request payload & response body"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  {d.success ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                  )}
+
+                  <div className="truncate">
+                    <span className="font-semibold text-white mr-2">{d.event}</span>
+                    <span className="text-slate-500 text-[11px] truncate max-w-xs inline-block align-bottom">
+                      {d.url}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
+                  <span
+                    className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                      d.success
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                        : 'bg-rose-950 text-rose-400 border border-rose-800'
+                    }`}
+                  >
+                    HTTP {d.response_status || 'ERR'}
+                  </span>
+
+                  <span>{d.duration_ms ? `${d.duration_ms}ms` : '—'}</span>
+                  <span>{new Date(d.created_at).toLocaleTimeString()}</span>
+
+                  {/* Quick Inspect Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedDelivery(d);
+                      setDeliveryActiveTab('response');
+                    }}
+                    className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans"
+                    title="Inspect Delivery"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Inspect</span>
+                  </button>
+
+                  {/* Quick Retry Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRetryDelivery(d.id);
+                    }}
+                    disabled={retryingDeliveryId === d.id}
+                    className="p-1 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans disabled:opacity-50"
+                    title="Re-send this webhook delivery"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${retryingDeliveryId === d.id ? 'animate-spin text-emerald-400' : ''}`} />
+                    <span className="hidden sm:inline">Retry</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* =============================================================== */}
+      {/* 3. LIVE WEBHOOK PLAYGROUND (SIMULATE & INSPECT) */}
       {/* =============================================================== */}
       <div
         id="webhook-playground-section"
@@ -482,10 +908,10 @@ export default function WebhooksPage() {
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-emerald-400" />
             <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-              Live Webhook Playground (Simulate & Inspect)
+              Interactive Webhook Playground (Simulate & Inspect)
             </h2>
           </div>
-          <span className="text-[11px] text-slate-400">Real HTTP dispatch with HMAC signature verification</span>
+          <span className="text-[11px] text-slate-400">Real HTTP dispatch with HMAC-SHA256 signature</span>
         </div>
 
         <div className="p-5 space-y-5">
@@ -509,7 +935,7 @@ export default function WebhooksPage() {
                   >
                     {webhooks.map((w) => (
                       <option key={w.id} value={w.id}>
-                        {w.url}
+                        {w.url} {!w.is_active ? '(Paused)' : ''}
                       </option>
                     ))}
                   </select>
@@ -567,12 +993,15 @@ export default function WebhooksPage() {
               </div>
 
               {/* Action Button */}
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
                 <div className="text-[11px] text-slate-400">
                   Target URL:{' '}
                   <span className="font-mono text-white font-semibold">
                     {activeWebhookObj?.url || 'Select endpoint above'}
                   </span>
+                  {activeWebhookObj && !activeWebhookObj.is_active && (
+                    <span className="ml-2 text-amber-400 font-semibold">(Currently Paused)</span>
+                  )}
                 </div>
 
                 <button
@@ -734,101 +1163,115 @@ export default function WebhooksPage() {
         )}
       </div>
 
-      {/* Webhook Deliveries Log */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-blue-400" />
-            <span>Recent Delivery History</span>
-          </div>
-          <span className="text-[11px] text-slate-500 font-normal">Last 20 dispatches</span>
-        </div>
-
-        {deliveries.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-sm">
-            No webhook deliveries recorded yet. Trigger a live challenge or use the Playground above to record delivery logs.
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-800 font-mono text-xs">
-            {deliveries.map((d) => (
-              <div key={d.id} className="p-3.5 flex items-center justify-between hover:bg-slate-850/50 flex-wrap gap-2">
-                <div className="flex items-center gap-3 min-w-0">
-                  {d.success ? (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-red-400 shrink-0" />
-                  )}
-                  <div className="truncate">
-                    <span className="font-semibold text-white mr-2">{d.event}</span>
-                    <span className="text-slate-500 text-[11px]">{d.url}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
-                  <span className={d.success ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>
-                    HTTP {d.response_status || 'ERR'}
-                  </span>
-                  <span>{d.duration_ms}ms</span>
-                  <span>{new Date(d.created_at).toLocaleTimeString()}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Modal: Register Webhook */}
-      {showModal && (
+      {/* =============================================================== */}
+      {/* MODAL 1: REGISTER WEBHOOK (IMPROVED DEVELOPER UX) */}
+      {/* =============================================================== */}
+      {showRegisterModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[92vh] overflow-y-auto space-y-4">
-            <div>
-              <h3 className="text-base font-bold text-white mb-1">Register Webhook Endpoint</h3>
-              <p className="text-xs text-slate-400">
-                Configure your server callback URL and select only the events you wish to receive
-              </p>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-base font-bold text-white mb-1">Register Webhook Endpoint</h3>
+                <p className="text-xs text-slate-400">
+                  Configure your HTTPS callback URL to receive real-time push event streams.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowRegisterModal(false)}
+                className="text-slate-400 hover:text-white p-1 text-sm font-semibold rounded-lg"
+              >
+                ✕
+              </button>
             </div>
 
-            {formError && (
+            {registerError && (
               <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center gap-2 text-xs text-red-300">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-                <span>{formError}</span>
+                <span>{registerError}</span>
               </div>
             )}
 
             <form onSubmit={handleCreateWebhook} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Webhook URL *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Webhook Callback URL *
+                </label>
                 <input
                   type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://api.yourcompany.com/v1/authguard-callback"
+                  value={registerUrl}
+                  onChange={(e) => setRegisterUrl(e.target.value)}
+                  placeholder="https://api.yourcompany.com/webhooks/authguard"
                   required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono shadow-inner"
                 />
+                <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1.5">
+                  <span>💡 Testing locally? You can use a free temporary endpoint from</span>
+                  <a
+                    href="https://webhook.site"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:underline flex items-center gap-0.5"
+                  >
+                    webhook.site <ExternalLink className="h-3 w-3" />
+                  </a>
+                </p>
               </div>
 
-              {/* Event Subscriptions Checklist */}
+              {/* Event Subscriptions Checklist with Quick Presets */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                  Event Subscriptions (Select Events to Receive) *
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                    Event Subscriptions *
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setRegisterEvents(AVAILABLE_EVENTS.map((e) => e.id))}
+                      className="text-blue-400 hover:text-blue-300 font-medium"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setRegisterEvents(['login.approved', 'login.denied'])}
+                      className="text-emerald-400 hover:text-emerald-300 font-medium"
+                    >
+                      Auth Only
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setRegisterEvents([])}
+                      className="text-slate-400 hover:text-slate-300 font-medium"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
                 <div className="space-y-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
                   {AVAILABLE_EVENTS.map((evt) => {
-                    const isChecked = selectedEvents.includes(evt.id);
+                    const isChecked = registerEvents.includes(evt.id);
                     return (
                       <label
                         key={evt.id}
                         className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
                           isChecked
-                            ? 'bg-slate-900 border-blue-600/40'
+                            ? 'bg-slate-900 border-blue-600/40 shadow-sm'
                             : 'bg-transparent border-slate-800/60 opacity-60 hover:opacity-100'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => handleToggleEvent(evt.id)}
+                          onChange={() =>
+                            setRegisterEvents((prev) =>
+                              prev.includes(evt.id)
+                                ? prev.filter((e) => e !== evt.id)
+                                : [...prev, evt.id]
+                            )
+                          }
                           className="mt-0.5 rounded border-slate-700 text-blue-600 focus:ring-0 bg-slate-950"
                         />
                         <div className="text-xs">
@@ -846,15 +1289,282 @@ export default function WebhooksPage() {
                 </div>
               </div>
 
-              {/* Custom Headers Builder */}
+              {/* Optional Custom Headers */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterHeaders(!showRegisterHeaders)}
+                  className="text-xs font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-colors mb-2"
+                >
+                  {showRegisterHeaders ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  <span>Custom Request Headers (Optional) {registerHeaders.length > 0 && `(${registerHeaders.length})`}</span>
+                </button>
+
+                {showRegisterHeaders && (
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-slate-400">
+                        Add client API keys, auth tokens, or custom headers dispatched with each webhook.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setRegisterHeaders([...registerHeaders, { key: '', value: '' }])}
+                        className="text-[11px] text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1"
+                      >
+                        <Plus className="h-3 w-3" />
+                        <span>Add Header</span>
+                      </button>
+                    </div>
+
+                    {registerHeaders.length === 0 ? (
+                      <p className="text-[11px] text-slate-500 italic py-1">
+                        No custom headers configured. Click &quot;Add Header&quot; if your endpoint requires authentication.
+                      </p>
+                    ) : (
+                      registerHeaders.map((header, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={header.key}
+                            onChange={(e) => {
+                              const updated = [...registerHeaders];
+                              updated[idx].key = e.target.value;
+                              setRegisterHeaders(updated);
+                            }}
+                            placeholder="Header Key (e.g. X-Api-Key)"
+                            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
+                          />
+                          <input
+                            type="text"
+                            value={header.value}
+                            onChange={(e) => {
+                              const updated = [...registerHeaders];
+                              updated[idx].value = e.target.value;
+                              setRegisterHeaders(updated);
+                            }}
+                            placeholder="Value (e.g. key_12345)"
+                            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setRegisterHeaders(registerHeaders.filter((_, i) => i !== idx))}
+                            className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                            title="Remove header"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingRegister}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-5 py-2.5 rounded-xl text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-blue-600/20 disabled:opacity-50"
+                >
+                  {submittingRegister && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>Save & Register Webhook</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =============================================================== */}
+      {/* MODAL 2: EDIT WEBHOOK MODAL (BRAND NEW!) */}
+      {/* =============================================================== */}
+      {editingWebhook && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-base font-bold text-white mb-1">Edit Webhook Configuration</h3>
+                <p className="text-xs text-slate-400">
+                  Update target URL, subscription events, status, and headers.
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingWebhook(null)}
+                className="text-slate-400 hover:text-white p-1 text-sm font-semibold rounded-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl flex items-center gap-2 text-xs text-red-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateWebhook} className="space-y-4">
+              {/* Webhook Status Toggle */}
+              <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-white flex items-center gap-2">
+                    <span>Webhook Status:</span>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                        editIsActive
+                          ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                          : 'bg-amber-950 text-amber-400 border-amber-800'
+                      }`}
+                    >
+                      {editIsActive ? 'Active (Receiving Events)' : 'Paused (Disabled)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Toggle whether AuthGuard should dispatch events to this URL
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditIsActive(!editIsActive)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                    editIsActive ? 'bg-emerald-600' : 'bg-slate-800'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      editIsActive ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* URL */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Webhook Callback URL *
+                </label>
+                <input
+                  type="url"
+                  value={editUrl}
+                  onChange={(e) => setEditUrl(e.target.value)}
+                  required
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+                />
+              </div>
+
+              {/* HMAC Secret Info */}
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between text-xs font-mono">
+                <div>
+                  <span className="text-slate-500 block text-[10px] uppercase font-semibold">HMAC Signing Secret</span>
+                  <code className="text-slate-300 font-mono text-xs">{editingWebhook.secret}</code>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopySecret(editingWebhook.id, editingWebhook.secret)}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-sans flex items-center gap-1.5 transition-colors"
+                >
+                  {copiedSecretId === editingWebhook.id ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-400" />
+                      <span className="text-emerald-400">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Event Subscriptions */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                    Event Subscriptions *
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setEditEvents(AVAILABLE_EVENTS.map((e) => e.id))}
+                      className="text-blue-400 hover:text-blue-300 font-medium"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditEvents(['login.approved', 'login.denied'])}
+                      className="text-emerald-400 hover:text-emerald-300 font-medium"
+                    >
+                      Auth Only
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditEvents([])}
+                      className="text-slate-400 hover:text-slate-300 font-medium"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+                  {AVAILABLE_EVENTS.map((evt) => {
+                    const isChecked = editEvents.includes(evt.id);
+                    return (
+                      <label
+                        key={evt.id}
+                        className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                          isChecked
+                            ? 'bg-slate-900 border-blue-600/40 shadow-sm'
+                            : 'bg-transparent border-slate-800/60 opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() =>
+                            setEditEvents((prev) =>
+                              prev.includes(evt.id)
+                                ? prev.filter((e) => e !== evt.id)
+                                : [...prev, evt.id]
+                            )
+                          }
+                          className="mt-0.5 rounded border-slate-700 text-blue-600 focus:ring-0 bg-slate-950"
+                        />
+                        <div className="text-xs">
+                          <div className="font-mono font-semibold text-white flex items-center gap-2">
+                            <span>{evt.label}</span>
+                            <span className={`text-[10px] px-1.5 py-0.2 rounded border ${evt.badgeClass}`}>
+                              event
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 mt-0.5">{evt.desc}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Custom Headers */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-semibold text-slate-300">
-                    Custom Client Headers (API Keys, Authorization)
+                    Custom Client Headers ({editHeaders.length})
                   </label>
                   <button
                     type="button"
-                    onClick={handleAddHeader}
+                    onClick={() => setEditHeaders([...editHeaders, { key: '', value: '' }])}
                     className="text-[11px] text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1"
                   >
                     <Plus className="h-3 w-3" />
@@ -863,54 +1573,266 @@ export default function WebhooksPage() {
                 </div>
 
                 <div className="space-y-2">
-                  {customHeaders.map((header, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={header.key}
-                        onChange={(e) => handleHeaderChange(idx, 'key', e.target.value)}
-                        placeholder="Header Key (e.g. X-Api-Key)"
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
-                      />
-                      <input
-                        type="text"
-                        value={header.value}
-                        onChange={(e) => handleHeaderChange(idx, 'value', e.target.value)}
-                        placeholder="Value (e.g. key_12345)"
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
-                      />
-                      {customHeaders.length > 1 && (
+                  {editHeaders.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 italic py-1">
+                      No custom headers configured.
+                    </p>
+                  ) : (
+                    editHeaders.map((header, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={header.key}
+                          onChange={(e) => {
+                            const updated = [...editHeaders];
+                            updated[idx].key = e.target.value;
+                            setEditHeaders(updated);
+                          }}
+                          placeholder="Header Key (e.g. Authorization)"
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
+                        />
+                        <input
+                          type="text"
+                          value={header.value}
+                          onChange={(e) => {
+                            const updated = [...editHeaders];
+                            updated[idx].value = e.target.value;
+                            setEditHeaders(updated);
+                          }}
+                          placeholder="Header Value"
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
+                        />
                         <button
                           type="button"
-                          onClick={() => handleRemoveHeader(idx)}
-                          className="p-1.5 text-slate-500 hover:text-red-400"
+                          onClick={() => setEditHeaders(editHeaders.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                          title="Remove header"
                         >
                           ✕
                         </button>
-                      )}
-                    </div>
-                  ))}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={() => setEditingWebhook(null)}
                   className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-xl text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-blue-600/20 disabled:opacity-50"
+                  disabled={submittingEdit}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-5 py-2.5 rounded-xl text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-blue-600/20 disabled:opacity-50"
                 >
-                  {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  <span>Save & Subscribe Webhook</span>
+                  {submittingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>Save Changes</span>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* =============================================================== */}
+      {/* MODAL 3: WEBHOOK DELIVERY INSPECTION (STRIPE-GRADE OBSERVABILITY) */}
+      {/* =============================================================== */}
+      {selectedDelivery && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full shadow-2xl max-h-[92vh] flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 bg-slate-950/60 flex items-start justify-between">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span
+                    className={`text-xs font-mono font-bold px-2.5 py-0.5 rounded-md border ${
+                      selectedDelivery.success
+                        ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                        : 'bg-rose-950 text-rose-400 border-rose-800'
+                    }`}
+                  >
+                    HTTP {selectedDelivery.response_status || 'ERROR'}
+                  </span>
+                  <span className="text-sm font-bold text-white font-mono">{selectedDelivery.event}</span>
+                  <span className="text-xs text-slate-400 font-mono">
+                    ⏱ {selectedDelivery.duration_ms ? `${selectedDelivery.duration_ms}ms` : '—'}
+                  </span>
+                </div>
+
+                <div className="text-xs font-mono text-slate-400 flex items-center gap-2 flex-wrap">
+                  <span className="text-slate-500">Target:</span>
+                  <span className="text-slate-200">{selectedDelivery.url}</span>
+                  <span className="text-slate-600">•</span>
+                  <span className="text-slate-400">{new Date(selectedDelivery.created_at).toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleRetryDelivery(selectedDelivery.id)}
+                  disabled={retryingDeliveryId === selectedDelivery.id}
+                  className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-600/40 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                  title="Re-send this webhook delivery"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${
+                      retryingDeliveryId === selectedDelivery.id ? 'animate-spin text-emerald-400' : ''
+                    }`}
+                  />
+                  <span>Re-send Webhook</span>
+                </button>
+                <button
+                  onClick={() => setSelectedDelivery(null)}
+                  className="text-slate-400 hover:text-white p-1 text-sm font-semibold rounded-lg"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Tab navigation */}
+            <div className="px-5 pt-3 border-b border-slate-800 bg-slate-950 flex items-center gap-2">
+              <button
+                onClick={() => setDeliveryActiveTab('response')}
+                className={`px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                  deliveryActiveTab === 'response'
+                    ? 'border-blue-500 text-white'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Server Response Body
+              </button>
+              <button
+                onClick={() => setDeliveryActiveTab('payload')}
+                className={`px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                  deliveryActiveTab === 'payload'
+                    ? 'border-blue-500 text-white'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Request Payload Dispatched
+              </button>
+              <button
+                onClick={() => setDeliveryActiveTab('headers')}
+                className={`px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                  deliveryActiveTab === 'headers'
+                    ? 'border-blue-500 text-white'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Dispatched Headers (HMAC)
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 flex-1 overflow-y-auto font-mono text-xs space-y-4">
+              {deliveryActiveTab === 'response' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Target Server Return Status:</span>
+                    <span className="font-bold text-white">
+                      HTTP {selectedDelivery.response_status || 'Connection Failed / Aborted'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 relative group">
+                    <pre className="text-slate-200 whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto">
+                      {selectedDelivery.response_body ||
+                        (selectedDelivery.success
+                          ? '(Endpoint returned empty 200 OK body)'
+                          : '(No response body received from server)')}
+                    </pre>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(selectedDelivery.response_body || '')}
+                      className="absolute top-2.5 right-2.5 p-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors"
+                      title="Copy Response Body"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {deliveryActiveTab === 'payload' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Full JSON Body Dispatched to Endpoint:</span>
+                    <button
+                      onClick={() =>
+                        navigator.clipboard.writeText(JSON.stringify(selectedDelivery.payload, null, 2))
+                      }
+                      className="text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                    >
+                      <Copy className="h-3 w-3" />
+                      <span>Copy JSON</span>
+                    </button>
+                  </div>
+
+                  <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 relative">
+                    <pre className="text-emerald-400 whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto">
+                      {JSON.stringify(selectedDelivery.payload, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {deliveryActiveTab === 'headers' && (
+                <div className="space-y-3">
+                  <div className="text-[11px] text-slate-400">
+                    Dispatched Request Headers with HMAC-SHA256 Signature:
+                  </div>
+
+                  <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 space-y-2">
+                    {selectedDelivery.payload?._headers ? (
+                      Object.entries(selectedDelivery.payload._headers).map(([k, v]) => (
+                        <div key={k} className="flex items-start gap-2 py-0.5 border-b border-slate-900 last:border-none">
+                          <span className="text-blue-400 font-bold shrink-0">{k}:</span>
+                          <span className="text-slate-300 break-all">{String(v)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="space-y-1.5 text-slate-300">
+                        <div className="flex items-start gap-2">
+                          <span className="text-blue-400 font-bold shrink-0">Content-Type:</span>
+                          <span>application/json</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-blue-400 font-bold shrink-0">User-Agent:</span>
+                          <span>AuthGuard-Webhook-Dispatcher/2.0</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-blue-400 font-bold shrink-0">X-AuthGuard-Event:</span>
+                          <span>{selectedDelivery.event}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-blue-400 font-bold shrink-0">X-AuthGuard-Tenant:</span>
+                          <span>{selectedDelivery.tenant_id}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-blue-400 font-bold shrink-0">X-AuthGuard-Signature:</span>
+                          <span className="text-slate-500 italic">(HMAC-SHA256 computed on dispatch)</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-800 bg-slate-950 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedDelivery(null)}
+                className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:bg-slate-800 transition-colors"
+              >
+                Close Inspector
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -435,11 +435,11 @@ export const tenantPortalController = {
     );
 
     const deliveries = await query(
-      `SELECT twl.*, tw.url
+      `SELECT twl.*, COALESCE(tw.url, '(Deleted Webhook)') as url
        FROM tenant_webhook_logs twl
-       JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
+       LEFT JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
        WHERE twl.tenant_id = $1
-       ORDER BY twl.created_at DESC LIMIT 20`,
+       ORDER BY twl.created_at DESC LIMIT 50`,
       [req.tenant.id]
     );
 
@@ -505,7 +505,7 @@ export const tenantPortalController = {
       updates.push(`url = $${idx++}`);
       values.push(url.trim());
     }
-    if (customHeaders && typeof customHeaders === 'object') {
+    if (customHeaders !== undefined && customHeaders !== null && typeof customHeaders === 'object') {
       updates.push(`custom_headers = $${idx++}`);
       values.push(JSON.stringify(customHeaders));
     }
@@ -591,6 +591,32 @@ export const tenantPortalController = {
       sentHeaders: deliveryResult.sentHeaders,
       sentPayload: deliveryResult.sentPayload,
     });
+  },
+
+  /**
+   * POST /api/tenant/webhooks/deliveries/:deliveryId/retry
+   * Re-dispatches a past webhook delivery log to the associated webhook endpoint
+   */
+  async retryDelivery(req, res) {
+    const logRes = await query(
+      `SELECT * FROM tenant_webhook_logs WHERE id = $1 AND tenant_id = $2`,
+      [req.params.deliveryId, req.tenant.id]
+    );
+    if (logRes.rows.length === 0) return res.status(404).json({ error: 'Delivery log not found' });
+    const log = logRes.rows[0];
+
+    const hookRes = await query(
+      `SELECT * FROM tenant_webhooks WHERE id = $1 AND tenant_id = $2`,
+      [log.webhook_id, req.tenant.id]
+    );
+    if (hookRes.rows.length === 0) {
+      return res.status(404).json({ error: 'The webhook endpoint associated with this delivery no longer exists' });
+    }
+    const hook = hookRes.rows[0];
+
+    const payloadData = log.payload?.data !== undefined ? log.payload.data : log.payload;
+    const result = await deliverToWebhook(req.tenant.id, hook, log.event, payloadData);
+    return res.json({ success: true, result });
   },
 
   /**

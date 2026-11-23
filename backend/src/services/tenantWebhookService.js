@@ -100,7 +100,7 @@ export async function deliverToWebhook(tenantId, hook, event, data) {
 
     responseStatus = resp.status;
     const text = await resp.text();
-    responseBody = text.slice(0, 1000); // save up to 1000 chars for diagnostics
+    responseBody = text.slice(0, 3000); // save up to 3000 chars for diagnostics
     success = resp.ok;
   } catch (err) {
     responseBody = `Error: ${err.message}`;
@@ -109,7 +109,12 @@ export async function deliverToWebhook(tenantId, hook, event, data) {
 
   const durationMs = Date.now() - startTime;
 
-  // Log delivery attempt
+  // Log delivery attempt with dispatched headers for full observability
+  const loggedPayload = {
+    ...payloadObj,
+    _headers: headers,
+  };
+
   await query(
     `INSERT INTO tenant_webhook_logs (id, tenant_id, webhook_id, event, payload, response_status, response_body, duration_ms, success)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -118,7 +123,7 @@ export async function deliverToWebhook(tenantId, hook, event, data) {
       tenantId,
       hook.id,
       event,
-      payloadObj,
+      loggedPayload,
       responseStatus,
       responseBody,
       durationMs,
