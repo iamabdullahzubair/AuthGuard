@@ -43,6 +43,7 @@ portalRouter.post('/webhooks', tenantPortalController.createWebhook);
 portalRouter.patch('/webhooks/:id', tenantPortalController.updateWebhook);
 portalRouter.delete('/webhooks/:id', tenantPortalController.deleteWebhook);
 portalRouter.post('/webhooks/:id/test', tenantPortalController.testWebhook);
+portalRouter.post('/webhooks/deliveries/:deliveryId/retry', tenantPortalController.retryDelivery);
 
 // End-User Management & Enrollment
 portalRouter.get('/users', tenantPortalController.listUsers);
