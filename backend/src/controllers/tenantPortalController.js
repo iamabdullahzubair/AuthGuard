@@ -544,38 +544,42 @@ export const tenantPortalController = {
     const hook = check.rows[0];
     const event = req.body.event || 'test.ping';
 
-    // Mock data templates if custom data not supplied
+    // Mock data templates matching production event payloads
     let testData = req.body.data;
     if (!testData || typeof testData !== 'object') {
+      const dummyId = crypto.randomUUID();
+      const now = Date.now();
       if (event === 'login.approved') {
         testData = {
-          requestId: crypto.randomUUID(),
-          username: 'alex.developer@example.com',
+          challengeId: dummyId,
+          requestId: dummyId,
+          userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+          email: 'alex.developer@example.com',
+          deviceId: 'dev_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
           status: 'approved',
-          approvedAt: new Date().toISOString(),
-          ipAddress: '192.168.1.105',
-          userAgent: 'AuthGuard-PWA/1.0 (Android; Mobile)',
+          timestamp: now,
         };
       } else if (event === 'login.denied') {
         testData = {
-          requestId: crypto.randomUUID(),
-          username: 'alex.developer@example.com',
+          challengeId: dummyId,
+          requestId: dummyId,
+          userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+          email: 'alex.developer@example.com',
+          deviceId: 'dev_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
           status: 'denied',
           reason: 'user_denied',
-          deniedAt: new Date().toISOString(),
-          ipAddress: '192.168.1.105',
+          timestamp: now,
         };
       } else if (event === 'user.enrolled') {
         testData = {
-          userId: crypto.randomUUID(),
           email: 'new.member@example.com',
-          enrolledAt: new Date().toISOString(),
-          twoFactorEnabled: true,
+          userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+          timestamp: now,
         };
       } else {
         testData = {
           message: 'AuthGuard webhook playground test ping',
-          time: new Date().toISOString(),
+          timestamp: now,
           system: 'AuthGuard 2.0 Webhook Engine',
         };
       }
