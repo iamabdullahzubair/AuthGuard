@@ -427,26 +427,88 @@ export const tenantPortalController = {
    */
   async listWebhooks(req, res) {
     const webhooks = await query(
-      `SELECT id, url, secret, custom_headers, events, is_active, created_at, updated_at
-       FROM tenant_webhooks
-       WHERE tenant_id = $1
-       ORDER BY created_at DESC`,
-      [req.tenant.id]
-    );
-
-    const deliveries = await query(
-      `SELECT twl.*, COALESCE(tw.url, '(Deleted Webhook)') as url
-       FROM tenant_webhook_logs twl
-       LEFT JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
-       WHERE twl.tenant_id = $1
-       ORDER BY twl.created_at DESC LIMIT 100`,
+      `SELECT 
+         tw.id, tw.url, tw.secret, tw.custom_headers, tw.events, tw.is_active, tw.created_at, tw.updated_at,
+         COUNT(twl.id)::int AS delivery_count
+       FROM tenant_webhooks tw
+       LEFT JOIN tenant_webhook_logs twl ON tw.id = twl.webhook_id
+       WHERE tw.tenant_id = $1
+       GROUP BY tw.id
+       ORDER BY tw.created_at DESC`,
       [req.tenant.id]
     );
 
     return res.json({
       webhooks: webhooks.rows,
-      deliveries: deliveries.rows,
     });
+  },
+
+  /**
+   * GET /api/tenant/webhooks/deliveries (Server-side paginated & filtered)
+   */
+  async listWebhookDeliveries(req, res) {
+    try {
+      const tenantId = req.tenant.id;
+      const { webhookId, status } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 5));
+      const offset = (page - 1) * limit;
+
+      const whereClauses = ['twl.tenant_id = $1'];
+      const params = [tenantId];
+      let paramIndex = 2;
+
+      if (webhookId) {
+        whereClauses.push(`twl.webhook_id = $${paramIndex}`);
+        params.push(webhookId);
+        paramIndex++;
+      }
+
+      if (status === 'success') {
+        whereClauses.push(`twl.success = true`);
+      } else if (status === 'failed') {
+        whereClauses.push(`twl.success = false`);
+      }
+
+      const whereSql = whereClauses.join(' AND ');
+
+      // Total count query
+      const countRes = await query(
+        `SELECT COUNT(*) as total
+         FROM tenant_webhook_logs twl
+         WHERE ${whereSql}`,
+        params
+      );
+      const total = parseInt(countRes.rows[0]?.total || 0, 10);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      // Paginated rows query
+      const listParams = [...params, limit, offset];
+      const rowsRes = await query(
+        `SELECT twl.*, COALESCE(tw.url, '(Deleted Webhook)') as url
+         FROM tenant_webhook_logs twl
+         LEFT JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
+         WHERE ${whereSql}
+         ORDER BY twl.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        listParams
+      );
+
+      return res.json({
+        deliveries: rowsRes.rows,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      });
+    } catch (err) {
+      console.error('[TenantPortal] listWebhookDeliveries error:', err);
+      return res.status(500).json({ error: 'Failed to fetch webhook deliveries' });
+    }
   },
 
   /**
