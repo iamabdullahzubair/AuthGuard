@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Webhook,
   Plus,
@@ -23,8 +23,10 @@ import {
   ExternalLink,
   Pencil,
   Eye,
-  Power,
-  Filter,
+  ArrowLeft,
+  ChevronRight,
+  Activity,
+  Layers,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import ConfirmModal from '@/components/ConfirmModal';
@@ -48,7 +50,7 @@ const AVAILABLE_EVENTS: AvailableEvent[] = [
     id: 'login.denied',
     label: 'login.denied',
     badgeClass: 'bg-rose-950 text-rose-400 border-rose-800',
-    desc: 'Dispatched when end-user denies 2FA challenge or enters mismatch challenge number',
+    desc: 'Dispatched when end-user denies 2FA challenge or enters mismatch number/word',
   },
   {
     id: 'user.enrolled',
@@ -102,7 +104,9 @@ export default function WebhooksPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+
+  // Active View: null = List View (Overview), string = Specific Webhook ID (Detail View)
+  const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null);
 
   // Notification Banner
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -136,10 +140,9 @@ export default function WebhooksPage() {
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'success' | 'failed'>('all');
 
   // Payload Doc Accordion
-  const [showPayloadRef, setShowPayloadRef] = useState(false);
+  const [showPayloadRef, setShowPayloadRef] = useState(true);
 
   // Playground State
-  const [playgroundHookId, setPlaygroundHookId] = useState<string>('');
   const [playgroundEvent, setPlaygroundEvent] = useState<string>('login.approved');
   const [playgroundPayloadText, setPlaygroundPayloadText] = useState<string>(
     JSON.stringify(DEFAULT_MOCK_PAYLOADS['login.approved'], null, 2)
@@ -172,12 +175,6 @@ export default function WebhooksPage() {
       const list = data.webhooks || [];
       setWebhooks(list);
       setDeliveries(data.deliveries || []);
-      setLastRefreshedAt(new Date());
-
-      // Pre-select first webhook if none selected in playground
-      if (list.length > 0 && !playgroundHookId) {
-        setPlaygroundHookId(list[0].id);
-      }
     } catch (err: any) {
       console.error(err);
       if (!isBackground) {
@@ -209,7 +206,8 @@ export default function WebhooksPage() {
   };
 
   // Toggle Active/Inactive
-  const handleToggleActive = async (hook: any) => {
+  const handleToggleActive = async (hook: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setTogglingWebhookId(hook.id);
     const newStatus = !hook.is_active;
 
@@ -243,7 +241,8 @@ export default function WebhooksPage() {
   };
 
   // Open Edit Modal
-  const openEditModal = (hook: any) => {
+  const openEditModal = (hook: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setEditingWebhook(hook);
     setEditUrl(hook.url);
     const hookEvents = Array.isArray(hook.events)
@@ -339,10 +338,10 @@ export default function WebhooksPage() {
       setNotification({ type: 'success', message: 'Webhook registered and active!' });
       setTimeout(() => setNotification(null), 3000);
 
+      await fetchWebhooks();
       if (res.webhook?.id) {
-        setPlaygroundHookId(res.webhook.id);
+        setSelectedWebhookId(res.webhook.id);
       }
-      fetchWebhooks();
     } catch (err: any) {
       setRegisterError(err.message || 'Failed to register webhook');
     } finally {
@@ -351,7 +350,8 @@ export default function WebhooksPage() {
   };
 
   // Delete Webhook
-  const openDeleteModal = (hookId: string, hookUrl: string) => {
+  const openDeleteModal = (hookId: string, hookUrl: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setDeleteModalState({
       isOpen: true,
       hookId,
@@ -366,8 +366,8 @@ export default function WebhooksPage() {
     try {
       await apiClient(`/api/tenant/webhooks/${deleteModalState.hookId}`, { method: 'DELETE' });
       setDeleteModalState(null);
-      if (playgroundHookId === deleteModalState.hookId) {
-        setPlaygroundHookId('');
+      if (selectedWebhookId === deleteModalState.hookId) {
+        setSelectedWebhookId(null);
       }
       setNotification({ type: 'success', message: 'Webhook deleted successfully.' });
       setTimeout(() => setNotification(null), 3000);
@@ -379,7 +379,7 @@ export default function WebhooksPage() {
     }
   };
 
-  // Retry / Redeliver a past delivery log
+  // Retry / Redeliver past delivery log
   const handleRetryDelivery = async (deliveryId: string) => {
     setRetryingDeliveryId(deliveryId);
     try {
@@ -390,12 +390,11 @@ export default function WebhooksPage() {
         type: res.result?.success ? 'success' : 'error',
         message: res.result?.success
           ? `Webhook re-delivered successfully! HTTP ${res.result.status}`
-          : `Re-delivery completed with error: ${res.result?.responseBody || `HTTP ${res.result?.status}`}`,
+          : `Re-delivery completed with response: ${res.result?.responseBody || `HTTP ${res.result?.status}`}`,
       });
       setTimeout(() => setNotification(null), 5000);
       await fetchWebhooks(true);
 
-      // If inspection modal is open for this delivery, update it with fresh result
       if (selectedDelivery && selectedDelivery.id === deliveryId) {
         setSelectedDelivery((prev: any) => ({
           ...prev,
@@ -421,12 +420,9 @@ export default function WebhooksPage() {
     setPlaygroundPayloadText(JSON.stringify(DEFAULT_MOCK_PAYLOADS[evtId] || {}, null, 2));
   };
 
-  // Run live hit from playground
-  const handleExecutePlayground = async () => {
-    if (!playgroundHookId) {
-      setNotification({ type: 'error', message: 'Please select a target webhook to test.' });
-      return;
-    }
+  // Run live simulation in playground
+  const handleExecutePlayground = async (targetHookId: string) => {
+    if (!targetHookId) return;
 
     setPlaygroundLoading(true);
     setPlaygroundResult(null);
@@ -439,7 +435,7 @@ export default function WebhooksPage() {
         throw new Error('Invalid JSON payload: ' + e.message);
       }
 
-      const res = await apiClient(`/api/tenant/webhooks/${playgroundHookId}/test`, {
+      const res = await apiClient(`/api/tenant/webhooks/${targetHookId}/test`, {
         method: 'POST',
         body: JSON.stringify({
           event: playgroundEvent,
@@ -456,7 +452,6 @@ export default function WebhooksPage() {
         sentPayload: res.sentPayload,
       });
 
-      // Refresh recent deliveries history table
       fetchWebhooks(true);
     } catch (err: any) {
       setPlaygroundResult({
@@ -473,10 +468,14 @@ export default function WebhooksPage() {
     }
   };
 
-  const activeWebhookObj = webhooks.find((w) => w.id === playgroundHookId);
+  const selectedWebhook = webhooks.find((w) => w.id === selectedWebhookId);
 
-  // Filtered deliveries
-  const filteredDeliveries = deliveries.filter((d) => {
+  // Deliveries filtered for the currently selected webhook
+  const selectedHookDeliveries = selectedWebhook
+    ? deliveries.filter((d) => d.webhook_id === selectedWebhook.id)
+    : deliveries;
+
+  const filteredDeliveries = selectedHookDeliveries.filter((d) => {
     if (deliveryFilter === 'success') return d.success === true;
     if (deliveryFilter === 'failed') return d.success === false;
     return true;
@@ -484,56 +483,6 @@ export default function WebhooksPage() {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Webhooks & Event Streams</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Real-time HMAC-SHA256 signed event notifications. Inspect dispatches, responses, and manage endpoints.
-          </p>
-        </div>
-        <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Auto Refresh Toggle */}
-          <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all ${
-              autoRefresh
-                ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700 shadow-sm'
-                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-            }`}
-            title="Auto-refresh delivery logs every 5 seconds"
-          >
-            <span className={`h-2 w-2 rounded-full ${autoRefresh ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-            <span>Auto-refresh {autoRefresh ? 'ON' : 'OFF'}</span>
-          </button>
-
-          {/* Manual Refresh Button */}
-          <button
-            onClick={() => fetchWebhooks()}
-            disabled={refreshing}
-            className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs transition-colors flex items-center justify-center disabled:opacity-50"
-            title="Refresh Webhooks & Deliveries"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
-          </button>
-
-          <button
-            onClick={() => {
-              setRegisterError(null);
-              setRegisterUrl('');
-              setRegisterEvents(['login.approved', 'login.denied']);
-              setRegisterHeaders([]);
-              setShowRegisterHeaders(false);
-              setShowRegisterModal(true);
-            }}
-            className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20 shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Register Webhook</span>
-          </button>
-        </div>
-      </div>
-
       {/* Global Notification Banner */}
       {notification && (
         <div
@@ -560,415 +509,452 @@ export default function WebhooksPage() {
         </div>
       )}
 
-      {/* =============================================================== */}
-      {/* 1. CONFIGURED WEBHOOK ENDPOINTS */}
-      {/* =============================================================== */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Webhook className="h-4 w-4 text-emerald-400" />
-            <span>Configured Endpoints ({webhooks.length})</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] text-emerald-400 font-medium">
-              Active: {webhooks.filter((w) => w.is_active).length}
-            </span>
-            <span className="text-[11px] text-slate-500 font-medium">
-              Paused: {webhooks.filter((w) => !w.is_active).length}
-            </span>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="p-12 text-center">
-            <Loader2 className="h-6 w-6 text-blue-500 animate-spin mx-auto" />
-            <p className="text-xs text-slate-500 mt-2">Loading configured endpoints...</p>
-          </div>
-        ) : webhooks.length === 0 ? (
-          <div className="p-10 text-center space-y-3">
-            <div className="h-10 w-10 rounded-full bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
-              <Webhook className="h-5 w-5" />
+      {/* ========================================================================= */}
+      {/* VIEW 1: OVERVIEW - REGISTERED WEBHOOK CARDS & SPEC */}
+      {/* ========================================================================= */}
+      {!selectedWebhook ? (
+        <div className="space-y-8">
+          {/* Top Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">Webhooks & Event Streams</h1>
+              <p className="text-sm text-slate-400 mt-1">
+                Real-time HMAC-SHA256 push event streams. Click any webhook card to view deliveries & test playground.
+              </p>
             </div>
-            <div className="text-sm font-semibold text-white">No webhooks registered yet</div>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              Add your server endpoint to receive instant notifications when users approve or deny 2FA logins.
-            </p>
-            <button
-              onClick={() => setShowRegisterModal(true)}
-              className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors inline-flex items-center gap-2 shadow-md shadow-blue-600/20"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Register First Webhook</span>
-            </button>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-800">
-            {webhooks.map((h) => {
-              const headers = typeof h.custom_headers === 'string' ? JSON.parse(h.custom_headers) : h.custom_headers || {};
-              const headerKeys = Object.keys(headers);
-              const hookEvents: string[] = Array.isArray(h.events)
-                ? h.events
-                : typeof h.events === 'string'
-                ? JSON.parse(h.events)
-                : [];
-              const isActive = h.is_active !== false;
-
-              return (
-                <div
-                  key={h.id}
-                  className={`p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
-                    isActive ? 'hover:bg-slate-850/30' : 'bg-slate-950/40 opacity-75'
-                  }`}
-                >
-                  <div className="space-y-2.5 flex-1 min-w-0">
-                    {/* URL and Status Badges */}
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="font-mono text-xs font-bold text-white bg-slate-950 px-3 py-1 rounded-lg border border-slate-800 truncate max-w-lg">
-                        {h.url}
-                      </span>
-
-                      {/* Active/Inactive Badge */}
-                      <span
-                        className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1.5 border ${
-                          isActive
-                            ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
-                            : 'bg-amber-950/70 text-amber-400 border-amber-800'
-                        }`}
-                      >
-                        <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-                        <span>{isActive ? 'Active' : 'Paused'}</span>
-                      </span>
-
-                      <span className="text-[10px] bg-slate-950 text-slate-400 border border-slate-800 px-2 py-0.5 rounded-full font-mono">
-                        HMAC-SHA256
-                      </span>
-                    </div>
-
-                    {/* Subscribed Events Badges */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[11px] text-slate-500 font-medium mr-1">Events:</span>
-                      {hookEvents.length > 0 ? (
-                        hookEvents.map((evt) => {
-                          const meta = AVAILABLE_EVENTS.find((e) => e.id === evt);
-                          return (
-                            <span
-                              key={evt}
-                              className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md border ${
-                                meta?.badgeClass || 'bg-slate-800 text-slate-300 border-slate-700'
-                              }`}
-                            >
-                              {evt}
-                            </span>
-                          );
-                        })
-                      ) : (
-                        <span className="text-[11px] text-amber-400 font-medium">None (Silent)</span>
-                      )}
-                    </div>
-
-                    {/* Secret & Custom Headers metadata */}
-                    <div className="text-slate-400 font-mono text-[11px] flex items-center gap-4 flex-wrap pt-0.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-slate-500">Signing Secret:</span>
-                        <code className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
-                          {h.secret.slice(0, 8)}••••••••
-                        </code>
-                        <button
-                          onClick={() => handleCopySecret(h.id, h.secret)}
-                          className="p-1 hover:text-white transition-colors text-slate-500"
-                          title="Copy Full HMAC Secret"
-                        >
-                          {copiedSecretId === h.id ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-400" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-slate-500">Headers:</span>
-                        {headerKeys.length > 0 ? (
-                          <span className="text-blue-400 font-semibold">{headerKeys.join(', ')}</span>
-                        ) : (
-                          <span className="text-slate-600">None</span>
-                        )}
-                      </div>
-
-                      {h.updated_at && (
-                        <span className="text-slate-600 text-[10px]">
-                          Updated {new Date(h.updated_at).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Actions & Active Toggle */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    {/* Active/Inactive Toggle Switch */}
-                    <button
-                      onClick={() => handleToggleActive(h)}
-                      disabled={togglingWebhookId === h.id}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                        isActive ? 'bg-emerald-600' : 'bg-slate-800'
-                      } ${togglingWebhookId === h.id ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      title={isActive ? 'Click to Pause Webhook' : 'Click to Activate Webhook'}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          isActive ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-
-                    {/* Test in Playground */}
-                    <button
-                      onClick={() => {
-                        setPlaygroundHookId(h.id);
-                        const playgroundEl = document.getElementById('webhook-playground-section');
-                        if (playgroundEl) {
-                          playgroundEl.scrollIntoView({ behavior: 'smooth' });
-                        }
-                      }}
-                      className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-600/40 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                      title="Test in Interactive Playground"
-                    >
-                      <Play className="h-3 w-3 fill-current" />
-                      <span>Test</span>
-                    </button>
-
-                    {/* Edit Webhook Button */}
-                    <button
-                      onClick={() => openEditModal(h)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-blue-400 hover:bg-blue-950/30 transition-colors border border-transparent hover:border-blue-900"
-                      title="Edit Webhook URL, Events & Headers"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-
-                    {/* Delete Button */}
-                    <button
-                      onClick={() => openDeleteModal(h.id, h.url)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors border border-transparent hover:border-red-900"
-                      title="Delete Webhook"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* =============================================================== */}
-      {/* 2. RECENT WEBHOOK DELIVERIES & LIVE INSPECTOR */}
-      {/* =============================================================== */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-blue-400" />
-            <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-              Webhook Delivery Logs & Inspection
-            </h2>
-            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">
-              {filteredDeliveries.length}
-            </span>
-          </div>
-
-          {/* Filter Pills */}
-          <div className="flex items-center gap-2">
-            <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-800 text-[11px]">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <button
-                onClick={() => setDeliveryFilter('all')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  deliveryFilter === 'all'
-                    ? 'bg-slate-800 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
+                onClick={() => fetchWebhooks()}
+                disabled={refreshing}
+                className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs transition-colors flex items-center justify-center disabled:opacity-50"
+                title="Refresh Webhooks List"
               >
-                All
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
               </button>
-              <button
-                onClick={() => setDeliveryFilter('success')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  deliveryFilter === 'success'
-                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Success (2xx)
-              </button>
-              <button
-                onClick={() => setDeliveryFilter('failed')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  deliveryFilter === 'failed'
-                    ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Failed
-              </button>
-            </div>
-          </div>
-        </div>
 
-        {deliveries.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-xs space-y-2">
-            <p>No webhook dispatches recorded yet.</p>
-            <p className="text-slate-600 text-[11px]">
-              Whenever a user approves/denies 2FA on their phone, or when you run a simulation in the Playground below, the delivery log and response body will appear here.
-            </p>
-          </div>
-        ) : filteredDeliveries.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-xs">
-            No deliveries match the &quot;{deliveryFilter}&quot; filter.
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-800 font-mono text-xs">
-            {filteredDeliveries.map((d) => (
-              <div
-                key={d.id}
+              <button
                 onClick={() => {
-                  setSelectedDelivery(d);
-                  setDeliveryActiveTab('response');
+                  setRegisterError(null);
+                  setRegisterUrl('');
+                  setRegisterEvents(['login.approved', 'login.denied']);
+                  setRegisterHeaders([]);
+                  setShowRegisterHeaders(false);
+                  setShowRegisterModal(true);
                 }}
-                className="p-3.5 flex items-center justify-between hover:bg-slate-850/60 cursor-pointer transition-colors flex-wrap gap-2 group"
-                title="Click to inspect full request payload & response body"
+                className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors flex items-center gap-2 shadow-md shadow-blue-600/20 shrink-0"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  {d.success ? (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
-                  )}
+                <Plus className="h-4 w-4" />
+                <span>Register Webhook</span>
+              </button>
+            </div>
+          </div>
 
-                  <div className="truncate">
-                    <span className="font-semibold text-white mr-2">{d.event}</span>
-                    <span className="text-slate-500 text-[11px] truncate max-w-xs inline-block align-bottom">
-                      {d.url}
-                    </span>
-                  </div>
+          {/* Section 1: Registered Webhooks Cards */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
+                <Webhook className="h-4 w-4 text-emerald-400" />
+                <span>Registered Endpoints ({webhooks.length})</span>
+              </div>
+              <span className="text-[11px] text-slate-500">
+                Click any card to inspect delivery logs and launch simulation playground
+              </span>
+            </div>
+
+            {loading ? (
+              <div className="p-12 text-center bg-slate-900/60 border border-slate-800 rounded-2xl">
+                <Loader2 className="h-6 w-6 text-blue-500 animate-spin mx-auto" />
+                <p className="text-xs text-slate-500 mt-2">Loading endpoints...</p>
+              </div>
+            ) : webhooks.length === 0 ? (
+              <div className="p-12 text-center bg-slate-900/60 border border-slate-800 rounded-2xl space-y-3">
+                <div className="h-12 w-12 rounded-full bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
+                  <Webhook className="h-6 w-6" />
                 </div>
+                <div className="text-sm font-semibold text-white">No Webhooks Registered Yet</div>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Add your server endpoint callback URL to receive real-time HTTP POST notifications when users approve or deny logins on the mobile authenticator.
+                </p>
+                <button
+                  onClick={() => setShowRegisterModal(true)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition-colors inline-flex items-center gap-2 shadow-md shadow-blue-600/20"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Register First Webhook</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {webhooks.map((h) => {
+                  const headers = typeof h.custom_headers === 'string' ? JSON.parse(h.custom_headers) : h.custom_headers || {};
+                  const headerKeys = Object.keys(headers);
+                  const hookEvents: string[] = Array.isArray(h.events)
+                    ? h.events
+                    : typeof h.events === 'string'
+                    ? JSON.parse(h.events)
+                    : [];
+                  const isActive = h.is_active !== false;
+                  const hookDeliveriesCount = deliveries.filter((d) => d.webhook_id === h.id).length;
 
-                <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
+                  return (
+                    <div
+                      key={h.id}
+                      onClick={() => setSelectedWebhookId(h.id)}
+                      className={`group relative p-5 bg-slate-900/90 border rounded-2xl cursor-pointer transition-all duration-200 flex flex-col justify-between hover:shadow-xl hover:border-blue-500/60 ${
+                        isActive ? 'border-slate-800' : 'border-slate-800/60 opacity-75 bg-slate-950/40'
+                      }`}
+                    >
+                      <div className="space-y-3">
+                        {/* Card Header: Status & Actions */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1.5 border ${
+                              isActive
+                                ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                                : 'bg-amber-950/70 text-amber-400 border-amber-800'
+                            }`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                            <span>{isActive ? 'Active' : 'Paused'}</span>
+                          </span>
+
+                          {/* Quick Actions (Prevent bubbling into card click) */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => handleToggleActive(h, e)}
+                              disabled={togglingWebhookId === h.id}
+                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                                isActive ? 'bg-emerald-600' : 'bg-slate-800'
+                              }`}
+                              title={isActive ? 'Click to Pause' : 'Click to Activate'}
+                            >
+                              <span
+                                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                  isActive ? 'translate-x-4.5' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+
+                            <button
+                              onClick={(e) => openEditModal(h, e)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors"
+                              title="Edit Webhook"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              onClick={(e) => openDeleteModal(h.id, h.url, e)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+                              title="Delete Webhook"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Target URL */}
+                        <div>
+                          <div className="font-mono text-xs font-bold text-white bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 truncate group-hover:border-blue-500/40 transition-colors">
+                            {h.url}
+                          </div>
+                        </div>
+
+                        {/* Event Badges */}
+                        <div>
+                          <span className="text-[10px] uppercase font-semibold text-slate-500 block mb-1">
+                            Subscribed Events ({hookEvents.length})
+                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {hookEvents.slice(0, 3).map((evt) => (
+                              <span
+                                key={evt}
+                                className="text-[10px] font-mono px-2 py-0.5 rounded-md border bg-slate-950 text-slate-300 border-slate-800"
+                              >
+                                {evt}
+                              </span>
+                            ))}
+                            {hookEvents.length > 3 && (
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                +{hookEvents.length - 3} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Secret Preview */}
+                        <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800/80">
+                          <span className="text-slate-500">Signing Secret:</span>
+                          <div className="flex items-center gap-1">
+                            <code className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded text-[10px] border border-slate-800">
+                              {h.secret.slice(0, 6)}••••
+                            </code>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopySecret(h.id, h.secret);
+                              }}
+                              className="p-1 hover:text-white transition-colors text-slate-500"
+                              title="Copy Full Secret"
+                            >
+                              {copiedSecretId === h.id ? (
+                                <Check className="h-3 w-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card Footer: Detail Link */}
+                      <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-blue-400 font-semibold group-hover:text-blue-300">
+                        <span className="text-[11px] text-slate-500 font-normal">
+                          {hookDeliveriesCount} deliveries recorded
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span>Details & Playground</span>
+                          <ChevronRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Webhook Architecture & Signature Verification Spec */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+            <button
+              type="button"
+              onClick={() => setShowPayloadRef(!showPayloadRef)}
+              className="w-full p-4 text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center justify-between hover:bg-slate-850/50 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Code2 className="h-4 w-4 text-blue-400" />
+                <span>Webhook Architecture & Signature Verification Spec</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-400 text-xs font-normal">
+                <span>{showPayloadRef ? 'Collapse Spec' : 'Show Spec & Verification Code'}</span>
+                {showPayloadRef ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </div>
+            </button>
+
+            {showPayloadRef && (
+              <div className="p-5 border-t border-slate-800 space-y-4">
+                <p className="text-xs text-slate-400">
+                  Below is the exact standard wire envelope, dispatched headers, and Node.js verification code dispatched to your server:
+                </p>
+                <WebhookPayloadViewer />
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* ========================================================================= */
+        /* VIEW 2: DETAIL VIEW - TARGET WEBHOOK PLAYGROUND & DELIVERIES */
+        /* ========================================================================= */
+        <div className="space-y-8">
+          {/* Back Navigation Bar */}
+          <div className="flex items-center justify-between gap-4 pb-2 border-b border-slate-800">
+            <button
+              onClick={() => setSelectedWebhookId(null)}
+              className="text-xs font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-1.5 transition-colors group"
+            >
+              <ArrowLeft className="h-4 w-4 group-hover:-translate-x-1 transition-transform" />
+              <span>Back to All Webhook Endpoints</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setAutoRefresh(!autoRefresh)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all ${
+                  autoRefresh
+                    ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700 shadow-sm'
+                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+                title="Auto-refresh deliveries every 5 seconds"
+              >
+                <span className={`h-2 w-2 rounded-full ${autoRefresh ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                <span>Auto-refresh {autoRefresh ? 'ON' : 'OFF'}</span>
+              </button>
+
+              <button
+                onClick={() => fetchWebhooks()}
+                disabled={refreshing}
+                className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs transition-colors flex items-center justify-center disabled:opacity-50"
+                title="Refresh Deliveries"
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Webhook Endpoint Summary Banner */}
+          <div className="p-6 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1.5 flex-1 min-w-0">
+                <div className="flex items-center gap-2.5 flex-wrap">
                   <span
-                    className={`font-bold px-2 py-0.5 rounded text-[10px] ${
-                      d.success
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                        : 'bg-rose-950 text-rose-400 border border-rose-800'
+                    className={`text-xs px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1.5 border ${
+                      selectedWebhook.is_active !== false
+                        ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                        : 'bg-amber-950 text-amber-400 border-amber-800'
                     }`}
                   >
-                    HTTP {d.response_status || 'ERR'}
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        selectedWebhook.is_active !== false ? 'bg-emerald-400' : 'bg-amber-400'
+                      }`}
+                    />
+                    <span>{selectedWebhook.is_active !== false ? 'Active' : 'Paused (Disabled)'}</span>
                   </span>
+                  <span className="text-xs text-slate-400 font-mono">ID: {selectedWebhook.id}</span>
+                </div>
 
-                  <span>{d.duration_ms ? `${d.duration_ms}ms` : '—'}</span>
-                  <span>{new Date(d.created_at).toLocaleTimeString()}</span>
-
-                  {/* Quick Inspect Button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedDelivery(d);
-                      setDeliveryActiveTab('response');
-                    }}
-                    className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans"
-                    title="Inspect Delivery"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Inspect</span>
-                  </button>
-
-                  {/* Quick Retry Button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRetryDelivery(d.id);
-                    }}
-                    disabled={retryingDeliveryId === d.id}
-                    className="p-1 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans disabled:opacity-50"
-                    title="Re-send this webhook delivery"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${retryingDeliveryId === d.id ? 'animate-spin text-emerald-400' : ''}`} />
-                    <span className="hidden sm:inline">Retry</span>
-                  </button>
+                <div className="font-mono text-sm sm:text-base font-bold text-white bg-slate-950 px-4 py-2 rounded-xl border border-slate-800 break-all select-all">
+                  {selectedWebhook.url}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
 
-      {/* =============================================================== */}
-      {/* 3. LIVE WEBHOOK PLAYGROUND (SIMULATE & INSPECT) */}
-      {/* =============================================================== */}
-      <div
-        id="webhook-playground-section"
-        className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl"
-      >
-        <div className="p-4 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-emerald-400" />
-            <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-              Interactive Webhook Playground (Simulate & Inspect)
-            </h2>
-          </div>
-          <span className="text-[11px] text-slate-400">Real HTTP dispatch with HMAC-SHA256 signature</span>
-        </div>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Active Toggle Switch */}
+                <button
+                  onClick={(e) => handleToggleActive(selectedWebhook, e)}
+                  disabled={togglingWebhookId === selectedWebhook.id}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                    selectedWebhook.is_active !== false ? 'bg-emerald-600' : 'bg-slate-800'
+                  }`}
+                  title={selectedWebhook.is_active !== false ? 'Click to Pause' : 'Click to Activate'}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      selectedWebhook.is_active !== false ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
 
-        <div className="p-5 space-y-5">
-          {webhooks.length === 0 ? (
-            <div className="text-center py-6 text-xs text-slate-500">
-              Register at least one webhook endpoint above to run live simulation tests.
+                <button
+                  onClick={(e) => openEditModal(selectedWebhook, e)}
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  <span>Edit</span>
+                </button>
+
+                <button
+                  onClick={(e) => openDeleteModal(selectedWebhook.id, selectedWebhook.url, e)}
+                  className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors border border-slate-800"
+                  title="Delete Webhook"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-          ) : (
-            <>
-              {/* Target Webhook & Event Selector Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Target Webhook Selector */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                    Select Target Endpoint
-                  </label>
-                  <select
-                    value={playgroundHookId}
-                    onChange={(e) => setPlaygroundHookId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
-                  >
-                    {webhooks.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.url} {!w.is_active ? '(Paused)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
 
-                {/* Event Type Selector */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-                    Select Event Type To Simulate
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {AVAILABLE_EVENTS.map((evt) => (
-                      <button
-                        key={evt.id}
-                        type="button"
-                        onClick={() => handlePlaygroundEventSelect(evt.id)}
-                        className={`px-3 py-2 rounded-xl text-xs font-mono font-semibold text-left transition-all border ${
-                          playgroundEvent === evt.id
-                            ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500 shadow-sm'
-                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-200'
-                        }`}
-                      >
-                        <div>{evt.label}</div>
-                      </button>
-                    ))}
-                  </div>
+            {/* Metadata Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-slate-800/80 text-xs font-mono">
+              {/* Signing Secret */}
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold block">HMAC Signing Secret</span>
+                <div className="flex items-center justify-between">
+                  <code className="text-slate-300 font-mono text-xs">{selectedWebhook.secret}</code>
+                  <button
+                    onClick={() => handleCopySecret(selectedWebhook.id, selectedWebhook.secret)}
+                    className="p-1 hover:text-white transition-colors text-slate-500"
+                    title="Copy Secret"
+                  >
+                    {copiedSecretId === selectedWebhook.id ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
                 </div>
               </div>
 
-              {/* Payload Editor with Wire Preview */}
+              {/* Subscribed Events */}
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold block">Subscribed Events</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(Array.isArray(selectedWebhook.events)
+                    ? selectedWebhook.events
+                    : typeof selectedWebhook.events === 'string'
+                    ? JSON.parse(selectedWebhook.events)
+                    : []
+                  ).map((evt: string) => (
+                    <span
+                      key={evt}
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-md border bg-slate-900 text-slate-300 border-slate-800"
+                    >
+                      {evt}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Headers */}
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold block">Custom Client Headers</span>
+                <div>
+                  {(() => {
+                    const headers = typeof selectedWebhook.custom_headers === 'string'
+                      ? JSON.parse(selectedWebhook.custom_headers)
+                      : selectedWebhook.custom_headers || {};
+                    const keys = Object.keys(headers);
+                    return keys.length > 0 ? (
+                      <span className="text-blue-400 font-semibold">{keys.join(', ')}</span>
+                    ) : (
+                      <span className="text-slate-500 italic">None configured</span>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section A: Live Webhook Playground (Targeted for this Webhook) */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+            <div className="p-4 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-emerald-400" />
+                <h2 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Interactive Simulator & Playground
+                </h2>
+              </div>
+              <span className="text-[11px] text-slate-400">
+                Dispatches real HTTP POST with HMAC signature to{' '}
+                <code className="text-slate-200">{selectedWebhook.url}</code>
+              </span>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Event Type Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                  Select Event Type To Simulate
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {AVAILABLE_EVENTS.map((evt) => (
+                    <button
+                      key={evt.id}
+                      type="button"
+                      onClick={() => handlePlaygroundEventSelect(evt.id)}
+                      className={`px-3 py-2 rounded-xl text-xs font-mono font-semibold text-left transition-all border ${
+                        playgroundEvent === evt.id
+                          ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500 shadow-sm'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-200'
+                      }`}
+                    >
+                      <div>{evt.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Payload Editor with Wire Preview Toggle */}
               <div>
                 <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                   <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[11px]">
@@ -1040,7 +1026,7 @@ export default function WebhooksPage() {
                         const wireEnvelope = {
                           id: 'e931ca87-25e2-446a-939e-2199b4aa0368',
                           event: playgroundEvent,
-                          tenantId: activeWebhookObj?.tenant_id || 'org_tenant_id',
+                          tenantId: selectedWebhook.tenant_id || 'org_tenant_id',
                           timestamp: Date.now(),
                           data: parsedData,
                         };
@@ -1054,19 +1040,13 @@ export default function WebhooksPage() {
               {/* Action Button */}
               <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
                 <div className="text-[11px] text-slate-400">
-                  Target URL:{' '}
-                  <span className="font-mono text-white font-semibold">
-                    {activeWebhookObj?.url || 'Select endpoint above'}
-                  </span>
-                  {activeWebhookObj && !activeWebhookObj.is_active && (
-                    <span className="ml-2 text-amber-400 font-semibold">(Currently Paused)</span>
-                  )}
+                  Target: <span className="font-mono text-white font-semibold">{selectedWebhook.url}</span>
                 </div>
 
                 <button
-                  onClick={handleExecutePlayground}
-                  disabled={playgroundLoading || !playgroundHookId}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-xs transition-all flex items-center gap-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleExecutePlayground(selectedWebhook.id)}
+                  disabled={playgroundLoading}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-xs transition-all flex items-center gap-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50"
                 >
                   {playgroundLoading ? (
                     <>
@@ -1190,40 +1170,143 @@ export default function WebhooksPage() {
                   </div>
                 </div>
               )}
-            </>
-          )}
+            </div>
+          </div>
+
+          {/* Section B: Delivery Logs Filtered For This Webhook */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-blue-400" />
+                <h2 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Deliveries For This Webhook ({filteredDeliveries.length})
+                </h2>
+              </div>
+
+              {/* Filter Pills */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-800 text-[11px]">
+                  <button
+                    onClick={() => setDeliveryFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                      deliveryFilter === 'all'
+                        ? 'bg-slate-800 text-white shadow'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setDeliveryFilter('success')}
+                    className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                      deliveryFilter === 'success'
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Success
+                  </button>
+                  <button
+                    onClick={() => setDeliveryFilter('failed')}
+                    className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                      deliveryFilter === 'failed'
+                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Failed
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {selectedHookDeliveries.length === 0 ? (
+              <div className="p-10 text-center text-slate-500 text-xs space-y-2">
+                <p>No delivery attempts recorded for this webhook yet.</p>
+                <p className="text-slate-600 text-[11px]">
+                  Use the Playground above to dispatch a test event, or trigger a live push login challenge on the authenticator app.
+                </p>
+              </div>
+            ) : filteredDeliveries.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-xs">
+                No deliveries match the &quot;{deliveryFilter}&quot; filter.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-800 font-mono text-xs">
+                {filteredDeliveries.map((d) => (
+                  <div
+                    key={d.id}
+                    onClick={() => {
+                      setSelectedDelivery(d);
+                      setDeliveryActiveTab('response');
+                    }}
+                    className="p-3.5 flex items-center justify-between hover:bg-slate-850/60 cursor-pointer transition-colors flex-wrap gap-2 group"
+                    title="Click to inspect response body and payload"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {d.success ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                      )}
+
+                      <div>
+                        <span className="font-semibold text-white mr-2">{d.event}</span>
+                        <span className="text-slate-500 text-[11px]">{new Date(d.created_at).toLocaleTimeString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
+                      <span
+                        className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                          d.success
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                            : 'bg-rose-950 text-rose-400 border border-rose-800'
+                        }`}
+                      >
+                        HTTP {d.response_status || 'ERR'}
+                      </span>
+
+                      <span>{d.duration_ms ? `${d.duration_ms}ms` : '—'}</span>
+
+                      {/* Quick Inspect Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedDelivery(d);
+                          setDeliveryActiveTab('response');
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans"
+                        title="Inspect Delivery"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Inspect</span>
+                      </button>
+
+                      {/* Quick Retry Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRetryDelivery(d.id);
+                        }}
+                        disabled={retryingDeliveryId === d.id}
+                        className="p-1 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans disabled:opacity-50"
+                        title="Re-send this webhook delivery"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${retryingDeliveryId === d.id ? 'animate-spin text-emerald-400' : ''}`} />
+                        <span>Retry</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Interactive Webhook Documentation & Payload Spec */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <button
-          type="button"
-          onClick={() => setShowPayloadRef(!showPayloadRef)}
-          className="w-full p-4 text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center justify-between hover:bg-slate-850/50 transition-colors text-left"
-        >
-          <div className="flex items-center gap-2">
-            <Code2 className="h-4 w-4 text-blue-400" />
-            <span>Webhook Architecture & Signature Verification Spec</span>
-          </div>
-          <div className="flex items-center gap-2 text-slate-400 text-xs font-normal">
-            <span>{showPayloadRef ? 'Collapse' : 'Show Spec & Verification Code'}</span>
-            {showPayloadRef ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </div>
-        </button>
-
-        {showPayloadRef && (
-          <div className="p-5 border-t border-slate-800 space-y-4">
-            <p className="text-xs text-slate-400">
-              Below is the exact schema, headers, and cryptographic signature dispatched to your server when a webhook fires:
-            </p>
-            <WebhookPayloadViewer />
-          </div>
-        )}
-      </div>
+      )}
 
       {/* =============================================================== */}
-      {/* MODAL 1: REGISTER WEBHOOK (IMPROVED DEVELOPER UX) */}
+      {/* MODAL 1: REGISTER WEBHOOK (CLEAN DEVELOPER UX) */}
       {/* =============================================================== */}
       {showRegisterModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1442,7 +1525,7 @@ export default function WebhooksPage() {
       )}
 
       {/* =============================================================== */}
-      {/* MODAL 2: EDIT WEBHOOK MODAL (BRAND NEW!) */}
+      {/* MODAL 2: EDIT WEBHOOK MODAL */}
       {/* =============================================================== */}
       {editingWebhook && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
