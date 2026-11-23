@@ -439,7 +439,7 @@ export const tenantPortalController = {
        FROM tenant_webhook_logs twl
        LEFT JOIN tenant_webhooks tw ON twl.webhook_id = tw.id
        WHERE twl.tenant_id = $1
-       ORDER BY twl.created_at DESC LIMIT 50`,
+       ORDER BY twl.created_at DESC LIMIT 100`,
       [req.tenant.id]
     );
 
