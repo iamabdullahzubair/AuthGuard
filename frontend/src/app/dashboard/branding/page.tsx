@@ -11,7 +11,6 @@ import {
   Zap,
   KeyRound,
   Type,
-  Lock,
 } from 'lucide-react';
 import { apiClient, getStoredTenant, setStoredAuth, getStoredMember, getStoredToken } from '@/lib/api';
 

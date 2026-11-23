@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Shield, Building, Mail, Lock, ArrowRight, Loader2, Key, RefreshCw, Globe } from 'lucide-react';
+import { Shield, Building, Mail, Lock, ArrowRight, Loader2, RefreshCw, Globe } from 'lucide-react';
 import { apiClient, setStoredAuth } from '@/lib/api';
 
 export default function RegisterPage() {

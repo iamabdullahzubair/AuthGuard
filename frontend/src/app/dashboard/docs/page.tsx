@@ -6,7 +6,6 @@ import {
   Check,
   Terminal,
   Shield,
-  CheckCircle2,
   Building,
   Key,
   Play,
@@ -15,9 +14,6 @@ import {
   Send,
   AlertCircle,
   QrCode,
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 
@@ -33,7 +29,6 @@ interface LiveResponseState {
 export default function DocsPage() {
   const [activeTab, setActiveTab] = useState<'curl' | 'node' | 'python'>('curl');
   const [tenantSlug, setTenantSlug] = useState('your-tenant-id');
-  const [tenantId, setTenantId] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [originUrl, setOriginUrl] = useState('https://auth.yourcompany.com');
 
@@ -75,7 +70,6 @@ export default function DocsPage() {
       .then((data) => {
         if (data.tenant?.slug || data.tenant?.id) {
           setTenantSlug(data.tenant.slug || data.tenant.id);
-          setTenantId(data.tenant.id);
           if (data.tenant.name) {
             setPushIssuer(data.tenant.branding?.issuerName || data.tenant.name);
             setEnrollIssuer(data.tenant.branding?.issuerName || data.tenant.name);
@@ -395,6 +389,7 @@ print("QR Code Data URL:", data.get("qrCodeDataUrl"))`,
         {/* Special rendering for QR code if returned by enroll API */}
         {state.data?.qrCodeDataUrl && (
           <div className="mt-3 p-3 bg-slate-900 border border-purple-800/50 rounded-xl flex items-center gap-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={state.data.qrCodeDataUrl}
               alt="Live Enrollment QR"
@@ -504,7 +499,7 @@ print("QR Code Data URL:", data.get("qrCodeDataUrl"))`,
           ))}
         </div>
         <div className="text-xs text-slate-500">
-          Click <span className="text-blue-400 font-semibold">"Live API Runner"</span> on any endpoint below to test in real-time.
+          Click <span className="text-blue-400 font-semibold">&quot;Live API Runner&quot;</span> on any endpoint below to test in real-time.
         </div>
       </div>
 
@@ -624,7 +619,7 @@ print("QR Code Data URL:", data.get("qrCodeDataUrl"))`,
         </div>
 
         <p className="px-5 pt-4 text-xs text-slate-400">
-          Dispatches out-of-band Web Push notification to user's enrolled PWA devices. Returns a 2-digit match challenge number to display to the user on their screen.
+          Dispatches out-of-band Web Push notification to user&apos;s enrolled PWA devices. Returns a 2-digit match challenge number to display to the user on their screen.
         </p>
 
         {/* Live Runner Drawer */}

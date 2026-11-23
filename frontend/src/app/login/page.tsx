@@ -12,7 +12,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tenantSlug, setTenantSlug] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<{ name: string; slug: string } | null>(null);
 
   useEffect(() => {
@@ -20,7 +19,6 @@ export default function LoginPage() {
       const params = new URLSearchParams(window.location.search);
       const slug = params.get('tenant');
       if (slug) {
-        setTenantSlug(slug);
         apiClient(`/api/tenant/resolve/${slug}`)
           .then((res) => {
             if (res.tenant) {

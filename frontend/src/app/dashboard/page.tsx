@@ -11,10 +11,8 @@ import {
   Clock,
   TrendingUp,
   Search,
-  ChevronDown,
   ShieldCheck,
   AlertCircle,
-  Check,
   Lock,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';

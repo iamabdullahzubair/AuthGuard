@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  Shield,
   KeyRound,
   Eye,
   EyeOff,
@@ -13,7 +12,6 @@ import {
   Building,
   Mail,
   ShieldCheck,
-  Smartphone,
 } from 'lucide-react';
 import { getStoredMember, getStoredTenant, apiClient, Member, Tenant } from '@/lib/api';
 

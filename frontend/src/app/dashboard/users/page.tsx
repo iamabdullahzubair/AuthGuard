@@ -508,6 +508,7 @@ export default function UsersPage() {
                       </div>
 
                       <div className="bg-white p-3 rounded-lg inline-block shadow-md mb-2 mt-1">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={enrollResult.qrCodeDataUrl}
                           alt="Setup QR Code"

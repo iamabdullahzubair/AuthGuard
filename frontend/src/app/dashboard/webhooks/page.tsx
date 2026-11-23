@@ -14,11 +14,9 @@ import {
   Code2,
   ChevronDown,
   ChevronUp,
-  Play,
   Terminal,
   Copy,
   Check,
-  Shield,
   RefreshCw,
   ExternalLink,
   Pencil,
@@ -26,8 +24,6 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  Activity,
-  Layers,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import ConfirmModal from '@/components/ConfirmModal';
@@ -244,6 +240,7 @@ export default function WebhooksPage() {
       setDeliveryPage(1);
       fetchDeliveries(selectedWebhookId, 1, deliveryPageSize, deliveryFilter);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWebhookId]);
 
   // When page, page size, or filter changes, fetch from backend
@@ -251,6 +248,7 @@ export default function WebhooksPage() {
     if (selectedWebhookId) {
       fetchDeliveries(selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deliveryPage, deliveryPageSize, deliveryFilter]);
 
   // Auto-refresh interval (every 5 seconds when toggled on)
@@ -264,6 +262,7 @@ export default function WebhooksPage() {
       }
     }, 5000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter]);
 
   const handleCopySecret = (hookId: string, secret: string) => {
@@ -655,8 +654,6 @@ export default function WebhooksPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {webhooks.map((h) => {
-                  const headers = typeof h.custom_headers === 'string' ? JSON.parse(h.custom_headers) : h.custom_headers || {};
-                  const headerKeys = Object.keys(headers);
                   const hookEvents: string[] = Array.isArray(h.events)
                     ? h.events
                     : typeof h.events === 'string'
