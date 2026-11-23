@@ -24,6 +24,7 @@ import {
   Pencil,
   Eye,
   ArrowLeft,
+  ChevronLeft,
   ChevronRight,
   Activity,
   Layers,
@@ -138,6 +139,12 @@ export default function WebhooksPage() {
   const [deliveryActiveTab, setDeliveryActiveTab] = useState<'response' | 'payload' | 'headers'>('response');
   const [retryingDeliveryId, setRetryingDeliveryId] = useState<string | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'success' | 'failed'>('all');
+  const [deliveryPage, setDeliveryPage] = useState<number>(1);
+  const [deliveryPageSize, setDeliveryPageSize] = useState<number>(5);
+
+  useEffect(() => {
+    setDeliveryPage(1);
+  }, [deliveryFilter, selectedWebhookId]);
 
   // Payload Doc Accordion
   const [showPayloadRef, setShowPayloadRef] = useState(true);
@@ -480,6 +487,13 @@ export default function WebhooksPage() {
     if (deliveryFilter === 'failed') return d.success === false;
     return true;
   });
+
+  const totalDeliveries = filteredDeliveries.length;
+  const totalPages = Math.max(1, Math.ceil(totalDeliveries / deliveryPageSize));
+  const safePage = Math.min(Math.max(deliveryPage, 1), totalPages);
+  const startIndex = (safePage - 1) * deliveryPageSize;
+  const endIndex = Math.min(startIndex + deliveryPageSize, totalDeliveries);
+  const paginatedDeliveries = filteredDeliveries.slice(startIndex, endIndex);
 
   return (
     <div className="space-y-8">
@@ -1232,74 +1246,142 @@ export default function WebhooksPage() {
                 No deliveries match the &quot;{deliveryFilter}&quot; filter.
               </div>
             ) : (
-              <div className="divide-y divide-slate-800 font-mono text-xs">
-                {filteredDeliveries.map((d) => (
-                  <div
-                    key={d.id}
-                    onClick={() => {
-                      setSelectedDelivery(d);
-                      setDeliveryActiveTab('response');
-                    }}
-                    className="p-3.5 flex items-center justify-between hover:bg-slate-850/60 cursor-pointer transition-colors flex-wrap gap-2 group"
-                    title="Click to inspect response body and payload"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      {d.success ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
-                      )}
+              <>
+                <div className="divide-y divide-slate-800 font-mono text-xs">
+                  {paginatedDeliveries.map((d) => (
+                    <div
+                      key={d.id}
+                      onClick={() => {
+                        setSelectedDelivery(d);
+                        setDeliveryActiveTab('response');
+                      }}
+                      className="p-3.5 flex items-center justify-between hover:bg-slate-850/60 cursor-pointer transition-colors flex-wrap gap-2 group"
+                      title="Click to inspect response body and payload"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {d.success ? (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                        )}
 
-                      <div>
-                        <span className="font-semibold text-white mr-2">{d.event}</span>
-                        <span className="text-slate-500 text-[11px]">{new Date(d.created_at).toLocaleTimeString()}</span>
+                        <div>
+                          <span className="font-semibold text-white mr-2">{d.event}</span>
+                          <span className="text-slate-500 text-[11px]">{new Date(d.created_at).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
+                        <span
+                          className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                            d.success
+                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                              : 'bg-rose-950 text-rose-400 border border-rose-800'
+                          }`}
+                        >
+                          HTTP {d.response_status || 'ERR'}
+                        </span>
+
+                        <span>{d.duration_ms ? `${d.duration_ms}ms` : '—'}</span>
+
+                        {/* Quick Inspect Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDelivery(d);
+                            setDeliveryActiveTab('response');
+                          }}
+                          className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans"
+                          title="Inspect Delivery"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>Inspect</span>
+                        </button>
+
+                        {/* Quick Retry Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRetryDelivery(d.id);
+                          }}
+                          disabled={retryingDeliveryId === d.id}
+                          className="p-1 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans disabled:opacity-50"
+                          title="Re-send this webhook delivery"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${retryingDeliveryId === d.id ? 'animate-spin text-emerald-400' : ''}`} />
+                          <span>Retry</span>
+                        </button>
                       </div>
                     </div>
+                  ))}
+                </div>
 
-                    <div className="flex items-center gap-4 text-slate-400 text-[11px] shrink-0">
-                      <span
-                        className={`font-bold px-2 py-0.5 rounded text-[10px] ${
-                          d.success
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                            : 'bg-rose-950 text-rose-400 border border-rose-800'
-                        }`}
-                      >
-                        HTTP {d.response_status || 'ERR'}
-                      </span>
-
-                      <span>{d.duration_ms ? `${d.duration_ms}ms` : '—'}</span>
-
-                      {/* Quick Inspect Button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedDelivery(d);
-                          setDeliveryActiveTab('response');
+                {/* Pagination Controls */}
+                <div className="p-3.5 bg-slate-950/70 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
+                  <div className="flex items-center gap-3">
+                    <span>
+                      Showing <span className="font-semibold text-white">{totalDeliveries === 0 ? 0 : startIndex + 1}</span> to{' '}
+                      <span className="font-semibold text-white">{endIndex}</span> of{' '}
+                      <span className="font-semibold text-white">{totalDeliveries}</span> deliveries
+                    </span>
+                    <span className="text-slate-700">|</span>
+                    <label className="flex items-center gap-1.5 text-slate-400 cursor-pointer">
+                      <span className="text-[11px] text-slate-500">Per page:</span>
+                      <select
+                        value={deliveryPageSize}
+                        onChange={(e) => {
+                          setDeliveryPageSize(Number(e.target.value));
+                          setDeliveryPage(1);
                         }}
-                        className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans"
-                        title="Inspect Delivery"
+                        className="bg-slate-900 border border-slate-750 text-white rounded-md px-2 py-0.5 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none cursor-pointer"
                       >
-                        <Eye className="h-3.5 w-3.5" />
-                        <span>Inspect</span>
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setDeliveryPage((prev) => Math.max(prev - 1, 1))}
+                        disabled={safePage === 1}
+                        className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-colors"
+                        title="Previous Page"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
                       </button>
 
-                      {/* Quick Retry Button */}
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+                          <button
+                            key={pageNum}
+                            onClick={() => setDeliveryPage(pageNum)}
+                            className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-all ${
+                              safePage === pageNum
+                                ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        ))}
+                      </div>
+
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRetryDelivery(d.id);
-                        }}
-                        disabled={retryingDeliveryId === d.id}
-                        className="p-1 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px] font-sans disabled:opacity-50"
-                        title="Re-send this webhook delivery"
+                        onClick={() => setDeliveryPage((prev) => Math.min(prev + 1, totalPages))}
+                        disabled={safePage === totalPages}
+                        className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-colors"
+                        title="Next Page"
                       >
-                        <RefreshCw className={`h-3.5 w-3.5 ${retryingDeliveryId === d.id ? 'animate-spin text-emerald-400' : ''}`} />
-                        <span>Retry</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
