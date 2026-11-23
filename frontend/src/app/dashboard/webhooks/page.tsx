@@ -141,10 +141,22 @@ export default function WebhooksPage() {
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'success' | 'failed'>('all');
   const [deliveryPage, setDeliveryPage] = useState<number>(1);
   const [deliveryPageSize, setDeliveryPageSize] = useState<number>(5);
-
-  useEffect(() => {
-    setDeliveryPage(1);
-  }, [deliveryFilter, selectedWebhookId]);
+  const [deliveriesLoading, setDeliveriesLoading] = useState(false);
+  const [deliveryPagination, setDeliveryPagination] = useState<{
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  }>({
+    total: 0,
+    page: 1,
+    limit: 5,
+    totalPages: 1,
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
 
   // Payload Doc Accordion
   const [showPayloadRef, setShowPayloadRef] = useState(true);
@@ -181,7 +193,6 @@ export default function WebhooksPage() {
       const data = await apiClient('/api/tenant/webhooks');
       const list = data.webhooks || [];
       setWebhooks(list);
-      setDeliveries(data.deliveries || []);
     } catch (err: any) {
       console.error(err);
       if (!isBackground) {
@@ -193,18 +204,67 @@ export default function WebhooksPage() {
     }
   };
 
+  const fetchDeliveries = async (
+    targetWebhookId?: string,
+    targetPage: number = deliveryPage,
+    targetLimit: number = deliveryPageSize,
+    targetFilter: 'all' | 'success' | 'failed' = deliveryFilter,
+    isBackground = false
+  ) => {
+    const hookId = targetWebhookId !== undefined ? targetWebhookId : selectedWebhookId;
+    if (!hookId) return;
+
+    if (!isBackground) setDeliveriesLoading(true);
+    try {
+      const params = new URLSearchParams({
+        webhookId: hookId,
+        page: String(targetPage),
+        limit: String(targetLimit),
+        status: targetFilter,
+      });
+      const data = await apiClient(`/api/tenant/webhooks/deliveries?${params.toString()}`);
+      setDeliveries(data.deliveries || []);
+      if (data.pagination) {
+        setDeliveryPagination(data.pagination);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch webhook deliveries:', err);
+    } finally {
+      if (!isBackground) setDeliveriesLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchWebhooks();
   }, []);
+
+  // When selected webhook changes, fetch page 1 from backend
+  useEffect(() => {
+    if (selectedWebhookId) {
+      setDeliveryPage(1);
+      fetchDeliveries(selectedWebhookId, 1, deliveryPageSize, deliveryFilter);
+    }
+  }, [selectedWebhookId]);
+
+  // When page, page size, or filter changes, fetch from backend
+  useEffect(() => {
+    if (selectedWebhookId) {
+      fetchDeliveries(selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter);
+    }
+  }, [deliveryPage, deliveryPageSize, deliveryFilter]);
 
   // Auto-refresh interval (every 5 seconds when toggled on)
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      fetchWebhooks(true);
+      if (selectedWebhookId) {
+        fetchDeliveries(selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter, true);
+      } else {
+        fetchWebhooks(true);
+      }
     }, 5000);
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter]);
 
   const handleCopySecret = (hookId: string, secret: string) => {
     navigator.clipboard.writeText(secret);
@@ -401,6 +461,9 @@ export default function WebhooksPage() {
       });
       setTimeout(() => setNotification(null), 5000);
       await fetchWebhooks(true);
+      if (selectedWebhookId) {
+        fetchDeliveries(selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter, true);
+      }
 
       if (selectedDelivery && selectedDelivery.id === deliveryId) {
         setSelectedDelivery((prev: any) => ({
@@ -460,6 +523,10 @@ export default function WebhooksPage() {
       });
 
       fetchWebhooks(true);
+      if (selectedWebhookId) {
+        setDeliveryPage(1);
+        fetchDeliveries(selectedWebhookId, 1, deliveryPageSize, deliveryFilter, true);
+      }
     } catch (err: any) {
       setPlaygroundResult({
         success: false,
@@ -477,23 +544,11 @@ export default function WebhooksPage() {
 
   const selectedWebhook = webhooks.find((w) => w.id === selectedWebhookId);
 
-  // Deliveries filtered for the currently selected webhook
-  const selectedHookDeliveries = selectedWebhook
-    ? deliveries.filter((d) => d.webhook_id === selectedWebhook.id)
-    : deliveries;
-
-  const filteredDeliveries = selectedHookDeliveries.filter((d) => {
-    if (deliveryFilter === 'success') return d.success === true;
-    if (deliveryFilter === 'failed') return d.success === false;
-    return true;
-  });
-
-  const totalDeliveries = filteredDeliveries.length;
-  const totalPages = Math.max(1, Math.ceil(totalDeliveries / deliveryPageSize));
-  const safePage = Math.min(Math.max(deliveryPage, 1), totalPages);
-  const startIndex = (safePage - 1) * deliveryPageSize;
-  const endIndex = Math.min(startIndex + deliveryPageSize, totalDeliveries);
-  const paginatedDeliveries = filteredDeliveries.slice(startIndex, endIndex);
+  const totalDeliveries = deliveryPagination.total;
+  const totalPages = deliveryPagination.totalPages;
+  const safePage = deliveryPagination.page;
+  const startIndex = totalDeliveries === 0 ? 0 : (safePage - 1) * deliveryPagination.limit;
+  const endIndex = Math.min(startIndex + deliveries.length, totalDeliveries);
 
   return (
     <div className="space-y-8">
@@ -608,7 +663,7 @@ export default function WebhooksPage() {
                     ? JSON.parse(h.events)
                     : [];
                   const isActive = h.is_active !== false;
-                  const hookDeliveriesCount = deliveries.filter((d) => d.webhook_id === h.id).length;
+                  const hookDeliveriesCount = Number(h.delivery_count || 0);
 
                   return (
                     <div
@@ -795,12 +850,17 @@ export default function WebhooksPage() {
               </button>
 
               <button
-                onClick={() => fetchWebhooks()}
-                disabled={refreshing}
+                onClick={() => {
+                  fetchWebhooks();
+                  if (selectedWebhookId) {
+                    fetchDeliveries(selectedWebhookId, deliveryPage, deliveryPageSize, deliveryFilter);
+                  }
+                }}
+                disabled={refreshing || deliveriesLoading}
                 className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs transition-colors flex items-center justify-center disabled:opacity-50"
                 title="Refresh Deliveries"
               >
-                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
+                <RefreshCw className={`h-4 w-4 ${refreshing || deliveriesLoading ? 'animate-spin text-blue-400' : ''}`} />
               </button>
             </div>
           </div>
@@ -1192,8 +1252,12 @@ export default function WebhooksPage() {
             <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-blue-400" />
-                <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Deliveries For This Webhook ({filteredDeliveries.length})
+                <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                  <span>Deliveries For This Webhook</span>
+                  <span className="text-slate-400">({deliveryPagination.total})</span>
+                  {deliveriesLoading && (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                  )}
                 </h2>
               </div>
 
@@ -1201,7 +1265,10 @@ export default function WebhooksPage() {
               <div className="flex items-center gap-2">
                 <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-800 text-[11px]">
                   <button
-                    onClick={() => setDeliveryFilter('all')}
+                    onClick={() => {
+                      setDeliveryFilter('all');
+                      setDeliveryPage(1);
+                    }}
                     className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
                       deliveryFilter === 'all'
                         ? 'bg-slate-800 text-white shadow'
@@ -1211,7 +1278,10 @@ export default function WebhooksPage() {
                     All
                   </button>
                   <button
-                    onClick={() => setDeliveryFilter('success')}
+                    onClick={() => {
+                      setDeliveryFilter('success');
+                      setDeliveryPage(1);
+                    }}
                     className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
                       deliveryFilter === 'success'
                         ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
@@ -1221,7 +1291,10 @@ export default function WebhooksPage() {
                     Success
                   </button>
                   <button
-                    onClick={() => setDeliveryFilter('failed')}
+                    onClick={() => {
+                      setDeliveryFilter('failed');
+                      setDeliveryPage(1);
+                    }}
                     className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
                       deliveryFilter === 'failed'
                         ? 'bg-rose-950 text-rose-300 border border-rose-800'
@@ -1234,21 +1307,26 @@ export default function WebhooksPage() {
               </div>
             </div>
 
-            {selectedHookDeliveries.length === 0 ? (
+            {deliveriesLoading && deliveries.length === 0 ? (
+              <div className="p-12 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+                <span>Loading delivery logs from server...</span>
+              </div>
+            ) : deliveryPagination.total === 0 ? (
               <div className="p-10 text-center text-slate-500 text-xs space-y-2">
-                <p>No delivery attempts recorded for this webhook yet.</p>
+                <p>
+                  {deliveryFilter === 'all'
+                    ? 'No delivery attempts recorded for this webhook yet.'
+                    : `No deliveries match the "${deliveryFilter}" filter.`}
+                </p>
                 <p className="text-slate-600 text-[11px]">
                   Use the Playground above to dispatch a test event, or trigger a live push login challenge on the authenticator app.
                 </p>
               </div>
-            ) : filteredDeliveries.length === 0 ? (
-              <div className="p-8 text-center text-slate-500 text-xs">
-                No deliveries match the &quot;{deliveryFilter}&quot; filter.
-              </div>
             ) : (
               <>
                 <div className="divide-y divide-slate-800 font-mono text-xs">
-                  {paginatedDeliveries.map((d) => (
+                  {deliveries.map((d) => (
                     <div
                       key={d.id}
                       onClick={() => {
@@ -1347,7 +1425,7 @@ export default function WebhooksPage() {
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => setDeliveryPage((prev) => Math.max(prev - 1, 1))}
-                        disabled={safePage === 1}
+                        disabled={!deliveryPagination.hasPrevPage || deliveriesLoading}
                         className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-colors"
                         title="Previous Page"
                       >
@@ -1359,6 +1437,7 @@ export default function WebhooksPage() {
                           <button
                             key={pageNum}
                             onClick={() => setDeliveryPage(pageNum)}
+                            disabled={deliveriesLoading}
                             className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-all ${
                               safePage === pageNum
                                 ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
@@ -1372,7 +1451,7 @@ export default function WebhooksPage() {
 
                       <button
                         onClick={() => setDeliveryPage((prev) => Math.min(prev + 1, totalPages))}
-                        disabled={safePage === totalPages}
+                        disabled={!deliveryPagination.hasNextPage || deliveriesLoading}
                         className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400 transition-colors"
                         title="Next Page"
                       >
