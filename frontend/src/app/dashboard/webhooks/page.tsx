@@ -66,30 +66,32 @@ const AVAILABLE_EVENTS: AvailableEvent[] = [
 
 const DEFAULT_MOCK_PAYLOADS: Record<string, any> = {
   'login.approved': {
-    requestId: 'req_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
-    username: 'alex.developer@example.com',
+    challengeId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+    requestId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+    userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+    email: 'alex.developer@example.com',
+    deviceId: 'dev_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
     status: 'approved',
-    approvedAt: new Date().toISOString(),
-    ipAddress: '192.168.1.105',
-    userAgent: 'AuthGuard-PWA/1.0 (Android 14; Mobile)',
+    timestamp: 1732402123456,
   },
   'login.denied': {
-    requestId: 'req_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
-    username: 'alex.developer@example.com',
+    challengeId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+    requestId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+    userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+    email: 'alex.developer@example.com',
+    deviceId: 'dev_8f19da52-9b04-4b53-93d1-f81d1982f6e9',
     status: 'denied',
     reason: 'user_denied',
-    deniedAt: new Date().toISOString(),
-    ipAddress: '192.168.1.105',
+    timestamp: 1732402123456,
   },
   'user.enrolled': {
-    userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
     email: 'new.member@example.com',
-    enrolledAt: new Date().toISOString(),
-    twoFactorEnabled: true,
+    userId: 'usr_c299db73-45f8-4177-8fa2-0391d4e022cc',
+    timestamp: 1732402123456,
   },
   'test.ping': {
     message: 'AuthGuard live webhook test ping',
-    timestamp: new Date().toISOString(),
+    timestamp: 1732402123456,
     system: 'AuthGuard 2.0 Webhook Engine',
   },
 };
@@ -142,6 +144,7 @@ export default function WebhooksPage() {
   const [playgroundPayloadText, setPlaygroundPayloadText] = useState<string>(
     JSON.stringify(DEFAULT_MOCK_PAYLOADS['login.approved'], null, 2)
   );
+  const [playgroundEditorMode, setPlaygroundEditorMode] = useState<'data' | 'wire'>('data');
   const [playgroundLoading, setPlaygroundLoading] = useState<boolean>(false);
   const [playgroundResult, setPlaygroundResult] = useState<{
     success: boolean;
@@ -965,31 +968,87 @@ export default function WebhooksPage() {
                 </div>
               </div>
 
-              {/* Payload Editor */}
+              {/* Payload Editor with Wire Preview */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                    Simulation Event Payload (<code className="text-emerald-400">data</code> object)
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPlaygroundPayloadText(
-                        JSON.stringify(DEFAULT_MOCK_PAYLOADS[playgroundEvent] || {}, null, 2)
-                      )
-                    }
-                    className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    <span>Reset Mock Payload</span>
-                  </button>
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                  <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setPlaygroundEditorMode('data')}
+                      className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                        playgroundEditorMode === 'data'
+                          ? 'bg-slate-800 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Edit Inner <code className="text-emerald-400 font-mono">data</code> Object
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPlaygroundEditorMode('wire')}
+                      className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                        playgroundEditorMode === 'wire'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Preview Full HTTP Body (As Received by Server)
+                    </button>
+                  </div>
+
+                  {playgroundEditorMode === 'data' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPlaygroundPayloadText(
+                          JSON.stringify(DEFAULT_MOCK_PAYLOADS[playgroundEvent] || {}, null, 2)
+                        )
+                      }
+                      className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      <span>Reset Mock Data</span>
+                    </button>
+                  )}
                 </div>
-                <textarea
-                  rows={6}
-                  value={playgroundPayloadText}
-                  onChange={(e) => setPlaygroundPayloadText(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-500 shadow-inner leading-relaxed"
-                />
+
+                {playgroundEditorMode === 'data' ? (
+                  <>
+                    <textarea
+                      rows={7}
+                      value={playgroundPayloadText}
+                      onChange={(e) => setPlaygroundPayloadText(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-500 shadow-inner leading-relaxed"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
+                      <span>📦 When dispatched, your server receives this wrapped in the envelope:</span>
+                      <code className="text-slate-400 font-mono text-[10px] bg-slate-950 px-1 py-0.5 rounded border border-slate-800">
+                        {`{ id, event, tenantId, timestamp, data }`}
+                      </code>
+                    </p>
+                  </>
+                ) : (
+                  <div className="bg-slate-950 rounded-xl p-3.5 border border-slate-700 relative group font-mono text-xs">
+                    <pre className="text-emerald-300 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
+                      {(() => {
+                        let parsedData = {};
+                        try {
+                          parsedData = JSON.parse(playgroundPayloadText);
+                        } catch {
+                          parsedData = { error: 'Invalid JSON entered in data editor' };
+                        }
+                        const wireEnvelope = {
+                          id: 'e931ca87-25e2-446a-939e-2199b4aa0368',
+                          event: playgroundEvent,
+                          tenantId: activeWebhookObj?.tenant_id || 'org_tenant_id',
+                          timestamp: Date.now(),
+                          data: parsedData,
+                        };
+                        return JSON.stringify(wireEnvelope, null, 2);
+                      })()}
+                    </pre>
+                  </div>
+                )}
               </div>
 
               {/* Action Button */}

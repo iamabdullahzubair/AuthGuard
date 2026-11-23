@@ -276,6 +276,9 @@ export const authController = {
       dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
         challengeId: effectiveChallengeId,
         requestId: effectiveChallengeId,
+        userId: challenge.endUserId,
+        email: challenge.account,
+        deviceId: verifiedDevice.id,
         status: 'denied',
         reason: 'user_denied',
         timestamp: Date.now(),
@@ -309,6 +312,9 @@ export const authController = {
         dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
           challengeId: effectiveChallengeId,
           requestId: effectiveChallengeId,
+          userId: challenge.endUserId,
+          email: challenge.account,
+          deviceId: verifiedDevice.id,
           status: 'denied',
           reason: 'number_mismatch',
           timestamp: Date.now(),
@@ -346,6 +352,9 @@ export const authController = {
         dispatchTenantWebhook(challenge.tenantId, 'login.denied', {
           challengeId: effectiveChallengeId,
           requestId: effectiveChallengeId,
+          userId: challenge.endUserId,
+          email: challenge.account,
+          deviceId: verifiedDevice.id,
           status: 'denied',
           reason: 'word_mismatch',
           timestamp: Date.now(),

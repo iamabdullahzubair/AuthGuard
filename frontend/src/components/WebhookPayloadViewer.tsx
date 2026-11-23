@@ -23,12 +23,13 @@ export default function WebhookPayloadViewer({
       tenantId: 'tenant_enterprise_xyz',
       timestamp: 1716300123456,
       data: {
+        challengeId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+        requestId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
         userId: 'usr_8923a1',
         email: 'alex.developer@company.com',
-        challengeNumber: 42,
-        approvalMethod: 'webpush_p256_signed',
-        ip: '192.168.1.105',
-        approvedAt: '2026-11-21T10:00:00.000Z',
+        deviceId: 'dev_3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c',
+        status: 'approved',
+        timestamp: 1716300123456,
       },
     },
     'login.denied': {
@@ -37,11 +38,14 @@ export default function WebhookPayloadViewer({
       tenantId: 'tenant_enterprise_xyz',
       timestamp: 1716300150000,
       data: {
+        challengeId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
+        requestId: 'c4d7f8a1-3b2a-4c5e-8d9e-0f1a2b3c4d5e',
         userId: 'usr_8923a1',
         email: 'alex.developer@company.com',
-        reason: 'Number mismatch or user rejected challenge',
-        ip: '192.168.1.105',
-        deniedAt: '2026-11-21T10:00:30.000Z',
+        deviceId: 'dev_3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c',
+        status: 'denied',
+        reason: 'user_denied',
+        timestamp: 1716300150000,
       },
     },
     'user.enrolled': {
@@ -50,10 +54,9 @@ export default function WebhookPayloadViewer({
       tenantId: 'tenant_enterprise_xyz',
       timestamp: 1716300200000,
       data: {
+        email: 'new.member@company.com',
         userId: 'usr_8923a1',
-        email: 'alex.developer@company.com',
-        enrolledAt: '2026-11-21T10:01:20.000Z',
-        algorithm: 'ECDSA_P256_RAW',
+        timestamp: 1716300200000,
       },
     },
     'test.ping': {
@@ -62,8 +65,9 @@ export default function WebhookPayloadViewer({
       tenantId: 'tenant_enterprise_xyz',
       timestamp: 1716300000000,
       data: {
-        message: 'Ping delivery test from AuthGuard',
-        sentAt: '2026-11-21T10:00:00.000Z',
+        message: 'AuthGuard live webhook test ping',
+        timestamp: 1716300000000,
+        system: 'AuthGuard 2.0 Webhook Engine',
       },
     },
   };
