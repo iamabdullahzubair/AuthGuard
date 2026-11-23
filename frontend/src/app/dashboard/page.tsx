@@ -368,18 +368,18 @@ export default function TenantOverviewPage() {
         </div>
 
         {/* Recent Authentication Activity */}
-        <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col min-h-[420px]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-semibold text-white">Recent Authentication Logs</h2>
             <Clock className="h-4 w-4 text-slate-500" />
           </div>
 
           {!stats?.recentActivity || stats.recentActivity.length === 0 ? (
-            <div className="text-center py-12 text-slate-500 text-sm">
+            <div className="flex-1 flex flex-col items-center justify-center text-center py-12 text-slate-500 text-sm">
               No authentication events recorded yet. Trigger a push challenge above to start.
             </div>
           ) : (
-            <div className="divide-y divide-slate-800/80">
+            <div className="divide-y divide-slate-800/80 flex-1">
               {stats.recentActivity.map((log: any) => (
                 <div key={log.id} className="py-3 flex items-center justify-between text-xs">
                   <div>
