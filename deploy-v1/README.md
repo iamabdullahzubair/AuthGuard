@@ -14,31 +14,16 @@ The root directory files (`deploy.sh`, `release.ps1`, `docker-compose.yml`) are 
 | **Where Docker Builds** | EC2 server (`docker compose --build`) | GitHub Actions Runner (`docker buildx`) |
 | **EC2 CPU & RAM Load** | 100% CPU Spike / RAM crash risk | **0% build load** (Instant `docker pull`) |
 | **Image Tagging** | Untagged / `:latest` only | **`v1.0.<run_number>-sha-<hash>`** |
-| **Rollback Capability** | Impossible / Re-run local build script | **Instant** (`IMAGE_TAG=v1.0.X ./deploy.sh`) |
-| **Release Trigger** | Local `release.ps1` script | Pull Request merge into `release/v1` |
+| **Rollback Capability** | Impossible / Re-run local build script | **100% Automatic** (Restores previous tag on failure) |
+| **Release Trigger** | Local `release.ps1` script | Push to `release/v1` |
 
 ---
 
-## 🏷️ Versioning Formula
+## 🏷️ Versioning & Auto-Rollback Engine
 
-Every time code is merged into `release/v1`, GitHub Actions generates a unique, immutable version tag:
-
-$$\text{Version Tag} = \text{v1.0.}[\text{GitHub Run Number}] - \text{sha}-[\text{Short Git Commit Hash}]$$
-
-*Example:* `v1.0.1-sha-7e60813`
-
-Additionally, a secondary tag `v1-latest` is updated to point to the newest stable build.
-
----
-
-## ⏪ Instant Rollback Procedure
-
-If a deployed version has a critical issue, there is **no need to re-compile or push code**. 
-Simply SSH into the EC2 instance and specify the previous working tag:
-
-```bash
-cd ~/AuthGuard
-IMAGE_TAG="v1.0.1-sha-7e60813" ./deploy-v1/deploy.sh
-```
-
-Within **5 seconds**, the previous stable container is running!
+1. **Tag Generation:**
+   Every build produces an immutable tag: `v1.0.<run_number>-sha-<hash>` (e.g. `v1.0.6-sha-9f20156`).
+2. **Current Tag State:**
+   The working version is tracked on EC2 in `.current_v1_tag`.
+3. **Automated Rollback:**
+   If a newly deployed container fails health verification within 18 seconds, `deploy.sh` automatically aborts, pulls the previous tag from `.current_v1_tag`, and restarts the stable containers.
