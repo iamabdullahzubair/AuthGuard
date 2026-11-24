@@ -12,10 +12,12 @@ on:
       - 'hotfix/**'
       - 'chore/**'
       - 'refactor/**'
+      - 'release/**'
   pull_request:
     branches:
       - main
       - prod
+      - 'release/**'
   # Allows manual trigger from GitHub Actions UI tab
   workflow_dispatch:
 
