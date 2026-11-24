@@ -61,8 +61,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:3001:3001"
     networks:
       - auth_net_v1
 

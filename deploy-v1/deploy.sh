@@ -143,7 +143,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     echo "Health check attempt $RETRY_COUNT of $MAX_RETRIES..."
     
-    HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health" 2>/dev/null || curl -k -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3001/api/health" 2>/dev/null || echo "000")
+    HTTP_STATUS=$(curl -k -s -L -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health" 2>/dev/null || echo "000")
     if [ "$HTTP_STATUS" -eq 200 ]; then
         echo "✅ Backend API is healthy and responding with 200 OK."
         HEALTHY=1
