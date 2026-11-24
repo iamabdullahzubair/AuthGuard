@@ -2,10 +2,20 @@ name: Continuous Integration (CI)
 
 # 1. Triggers: Run automatically on Pull Requests and Pushes
 on:
-  pull_request:
-    branches: [ main, prod ]
   push:
-    branches: [ main, prod, 'fix/*', 'feat/*' ]
+    branches:
+      - main
+      - 'feat/**'
+      - 'feature/**'
+      - 'fix/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'chore/**'
+      - 'refactor/**'
+  pull_request:
+    branches:
+      - main
+      - prod
   # Allows manual trigger from GitHub Actions UI tab
   workflow_dispatch:
 
