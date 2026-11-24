@@ -49,7 +49,7 @@ rollback() {
     else
         echo "⚠️ No different previous version available to roll back to."
         echo "📋 Dumping recent container logs for debugging:"
-        $DOCKER_CMD logs --tail=30 app nginx || true
+        $DOCKER_CMD logs --tail=30 postgres app nginx || true
     fi
     echo "========================================================"
     exit 1
