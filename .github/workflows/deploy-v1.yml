@@ -207,10 +207,11 @@ jobs:
             
             echo "📍 Deploying in directory: $(pwd)"
             
-            # 2. Pull latest code from release/v1 branch
+            # 2. Force clean sync with remote release/v1 (discards server overrides)
+            git reset --hard HEAD
             git fetch origin release/v1
-            git checkout release/v1
-            git pull origin release/v1
+            git checkout -B release/v1 origin/release/v1
+            git reset --hard origin/release/v1
             
             # 3. Make scripts executable
             chmod +x deploy-v1/deploy.sh 2>/dev/null || true
