@@ -27,10 +27,23 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 1
 fi
 
-# Use --env-file to explicitly load root .env variables
-DOCKER_CMD="docker compose --env-file .env -f $COMPOSE_FILE"
+# Use --project-directory . to resolve ./nginx/ssl and --env-file to load root .env
+DOCKER_CMD="docker compose --project-directory . --env-file .env -f $COMPOSE_FILE"
 
-# Step 3: Stop legacy V0 containers to release ports (80, 443, 6379, 5432)
+# Step 3: Ensure initial self-signed SSL certs exist so Nginx can boot immediately
+mkdir -p ./nginx/ssl
+if [ ! -f ./nginx/ssl/cert.pem ] || [ ! -f ./nginx/ssl/key.pem ]; then
+    echo "🔒 Generating initial self-signed SSL certificate for Nginx boot..."
+    chmod +x ./nginx/ssl/generate-self-signed.sh 2>/dev/null || true
+    ./nginx/ssl/generate-self-signed.sh 2>/dev/null || {
+        openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+            -keyout ./nginx/ssl/key.pem \
+            -out ./nginx/ssl/cert.pem \
+            -subj "/CN=localhost/O=AuthGuard/C=US" 2>/dev/null || true
+    }
+fi
+
+# Step 4: Stop legacy V0 containers to release ports (80, 443, 6379, 5432)
 echo "🛑 Stopping legacy V0 containers (if running) to prevent port conflicts..."
 docker stop auth_nginx auth_app auth_postgres auth_redis auth_certbot 2>/dev/null || true
 
