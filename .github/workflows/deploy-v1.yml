@@ -1,5 +1,6 @@
 name: Production V1 Deployment (GHCR Edition)
 
+# Triggered ONLY when code is pushed/merged to release/v1
 on:
   push:
     branches:
@@ -12,16 +13,104 @@ permissions:
 
 jobs:
   # =========================================================================
-  # JOB 1: Build Versioned Docker Images & Push to GHCR
+  # STAGE 1: Automated Verification (Tests MUST pass before anything else)
+  # =========================================================================
+  test-frontend:
+    name: 🎨 Verify Frontend Build & Types
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Install Frontend dependencies (clean install with devDependencies)
+        run: |
+          cd frontend
+          npm ci
+
+      - name: 🏗️ Verify Frontend Build & TypeScript
+        run: |
+          cd frontend
+          npm run build
+
+  test-backend:
+    name: 🛡️ Verify Backend Unit & Crypto Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: authenticator_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: 📦 Install Backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: 🧪 Run Automated Security & Crypto Tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/authenticator_db
+          REDIS_URL: redis://localhost:6379
+          AES_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          SESSION_SECRET: test-ci-session-secret-string-32-chars
+          VAPID_PUBLIC_KEY: BNo2PXuFiety_I5a7fQQxpPO8ixhApzyh-DyR5Ut1qGS34wRF4iExHgZHvKy5qRrjMmKd9PH9Algh_5TN6y4Q_0
+          VAPID_PRIVATE_KEY: t5LxJrtasXAkHhDKlVwO1TrbVpeZ1OrXEHVSfjK2wMM
+          AUTH_RATE_LIMIT_MAX: '1000'
+          RATE_LIMIT_MAX: '1000'
+        run: |
+          cd backend
+          npm test
+
+  # =========================================================================
+  # STAGE 2: Build Versioned Docker Images & Push to GHCR
   # =========================================================================
   build-and-push:
     name: 🐳 Build & Push Versioned Containers
+    needs: [test-frontend, test-backend]
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.version.outputs.image_tag }}
 
     steps:
-      - name: 📥 Checkout repository code
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
       - name: 🏷️ Compute Semantic Version & Short Commit SHA
@@ -31,21 +120,22 @@ jobs:
           TAG="v1.0.${{ github.run_number }}-sha-${SHORT_SHA}"
           echo "Computed Image Tag: $TAG"
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
 
-      - name: ⚙️ Setup Node.js 20 with npm caching
+      - name: ⚙️ Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: 📦 Compile Next.js Frontend Static Assets
-        env:
-          NODE_ENV: production
+      - name: 📦 Install Frontend dependencies (including tailwindcss & devDependencies)
         run: |
           cd frontend
           npm ci
+
+      - name: 🏗️ Compile Next.js Frontend Static Assets (frontend/out)
+        run: |
+          cd frontend
           npm run build
 
       - name: 🔑 Log in to GitHub Container Registry (GHCR)
@@ -65,7 +155,7 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ghcr.io/iamabdullahzubair/authguard-app:${{ env.IMAGE_TAG }}
+            ghcr.io/iamabdullahzubair/authguard-app:${{ steps.version.outputs.image_tag }}
             ghcr.io/iamabdullahzubair/authguard-app:v1-latest
 
       - name: 🚀 Build & Push Nginx Image (with compiled frontend)
@@ -75,15 +165,15 @@ jobs:
           file: ./nginx/Dockerfile
           push: true
           tags: |
-            ghcr.io/iamabdullahzubair/authguard-nginx:${{ env.IMAGE_TAG }}
+            ghcr.io/iamabdullahzubair/authguard-nginx:${{ steps.version.outputs.image_tag }}
             ghcr.io/iamabdullahzubair/authguard-nginx:v1-latest
 
   # =========================================================================
-  # JOB 2: Deploy to AWS EC2 (Zero-Build Fast Pull)
+  # STAGE 3: Deploy to AWS EC2 (Zero-Build Fast Pull in Seconds)
   # =========================================================================
   deploy:
     name: 🚀 Deploy to AWS EC2
-    needs: build-and-push
+    needs: [build-and-push]
     runs-on: ubuntu-latest
 
     steps:
