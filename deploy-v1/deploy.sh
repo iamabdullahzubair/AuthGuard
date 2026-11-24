@@ -134,8 +134,8 @@ if $DOCKER_CMD exec certbot test -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem
 fi
 
 # Step 10: Live Health Verification Loop
-echo "🔍 Verifying local container health..."
-MAX_RETRIES=6
+echo "🔍 Verifying platform health via https://${DOMAIN}/api/health..."
+MAX_RETRIES=8
 RETRY_COUNT=0
 HEALTHY=0
 
@@ -143,7 +143,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     echo "Health check attempt $RETRY_COUNT of $MAX_RETRIES..."
     
-    HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" "http://localhost:3001/api/health" 2>/dev/null || echo "000")
+    HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health" 2>/dev/null || curl -k -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3001/api/health" 2>/dev/null || echo "000")
     if [ "$HTTP_STATUS" -eq 200 ]; then
         echo "✅ Backend API is healthy and responding with 200 OK."
         HEALTHY=1
