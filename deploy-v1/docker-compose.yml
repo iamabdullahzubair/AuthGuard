@@ -1,0 +1,110 @@
+# ==============================================================================
+# AuthGuard V1 - Production Docker Compose (GHCR Container Registry)
+# ==============================================================================
+# Uses pre-compiled, versioned images from GitHub Container Registry (ghcr.io)
+# Zero build load on the server. Fast, immutable, and easily rollback-able.
+# ==============================================================================
+
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: auth_postgres_v1
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-authenticator_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-authenticator_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    networks:
+      - auth_net_v1
+
+  # 2. Redis In-Memory Cache & Pub/Sub
+  redis:
+    image: redis:7-alpine
+    container_name: auth_redis_v1
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "6379:6379"
+    networks:
+      - auth_net_v1
+
+  # 3. Backend API Application (Pre-built image from GHCR)
+  app:
+    image: ghcr.io/iamabdullahzubair/authguard-app:${IMAGE_TAG:-v1.0.0}
+    container_name: auth_app_v1
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authenticator_db}
+      REDIS_URL: redis://redis:6379
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      AES_SECRET_KEY: ${AES_SECRET_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-admin@example.com}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-Admin123!Secure}
+      APP_URL: ${APP_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - auth_net_v1
+
+  # 4. Nginx Reverse Proxy with Built-in Frontend (Pre-built image from GHCR)
+  nginx:
+    image: ghcr.io/iamabdullahzubair/authguard-nginx:${IMAGE_TAG:-v1.0.0}
+    container_name: auth_nginx_v1
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/www/certbot
+    depends_on:
+      - app
+    networks:
+      - auth_net_v1
+
+  # 5. Certbot for Automated Let's Encrypt SSL Renewals
+  certbot:
+    image: certbot/certbot:latest
+    container_name: auth_certbot_v1
+    restart: unless-stopped
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/www/certbot
+    networks:
+      - auth_net_v1
+
+networks:
+  auth_net_v1:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  certbot-etc:
+  certbot-var:

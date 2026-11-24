@@ -1,0 +1,163 @@
+name: Production V1 Deployment (GHCR Edition)
+
+on:
+  push:
+    branches:
+      - 'release/v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # =========================================================================
+  # JOB 1: Build Versioned Docker Images & Push to GHCR
+  # =========================================================================
+  build-and-push:
+    name: 🐳 Build & Push Versioned Containers
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.version.outputs.image_tag }}
+
+    steps:
+      - name: 📥 Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Compute Semantic Version & Short Commit SHA
+        id: version
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAG="v1.0.${{ github.run_number }}-sha-${SHORT_SHA}"
+          echo "Computed Image Tag: $TAG"
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: ⚙️ Setup Node.js 20 with npm caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Compile Next.js Frontend Static Assets
+        env:
+          NODE_ENV: production
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: 🔑 Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🚀 Build & Push Backend App Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/iamabdullahzubair/authguard-app:${{ env.IMAGE_TAG }}
+            ghcr.io/iamabdullahzubair/authguard-app:v1-latest
+
+      - name: 🚀 Build & Push Nginx Image (with compiled frontend)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./nginx/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/iamabdullahzubair/authguard-nginx:${{ env.IMAGE_TAG }}
+            ghcr.io/iamabdullahzubair/authguard-nginx:v1-latest
+
+  # =========================================================================
+  # JOB 2: Deploy to AWS EC2 (Zero-Build Fast Pull)
+  # =========================================================================
+  deploy:
+    name: 🚀 Deploy to AWS EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into EC2 and Trigger V1 Deployment
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          envs: IMAGE_TAG
+          script: |
+            echo "========================================================"
+            echo "🚀 Deploying AuthGuard V1: $IMAGE_TAG"
+            echo "========================================================"
+            
+            # 1. Locate project directory on EC2
+            if [ -d "$HOME/AuthGuard" ]; then
+              cd "$HOME/AuthGuard"
+            elif [ -f "./deploy-v1/deploy.sh" ]; then
+              true
+            else
+              FOUND_DIR=$(find "$HOME" -maxdepth 2 -name "deploy-v1" -type d 2>/dev/null | head -n 1)
+              if [ -n "$FOUND_DIR" ]; then
+                cd "$FOUND_DIR/.."
+              else
+                echo "❌ Error: Could not find AuthGuard directory on EC2!"
+                exit 1
+              fi
+            fi
+            
+            echo "📍 Deploying in directory: $(pwd)"
+            
+            # 2. Pull latest code from release/v1 branch
+            git fetch origin release/v1
+            git checkout release/v1
+            git pull origin release/v1
+            
+            # 3. Make scripts executable
+            chmod +x deploy-v1/deploy.sh 2>/dev/null || true
+            
+            # 4. Run V1 zero-build deployment
+            IMAGE_TAG="${IMAGE_TAG}" ./deploy-v1/deploy.sh
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+
+      - name: Verify Live Application Health
+        run: |
+          echo "🔍 Verifying live server health..."
+          DOMAIN="${{ secrets.EC2_HOST }}.nip.io"
+          
+          MAX_RETRIES=6
+          RETRY_COUNT=0
+          SUCCESS=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Attempt $RETRY_COUNT of $MAX_RETRIES: Checking https://${DOMAIN}/api/health..."
+            
+            HTTP_STATUS=$(curl -k -s -L -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/health" || echo "000")
+            echo "Response Status Code: $HTTP_STATUS"
+            
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ HEALTH CHECK PASSED! Backend API is live and returning 200 OK."
+              SUCCESS=1
+              break
+            fi
+            
+            echo "⏳ Containers stabilizing, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          if [ $SUCCESS -ne 1 ]; then
+            echo "❌ HEALTH CHECK FAILED after $MAX_RETRIES attempts!"
+            curl -k -i "https://${DOMAIN}/api/health" || true
+            exit 1
+          fi
