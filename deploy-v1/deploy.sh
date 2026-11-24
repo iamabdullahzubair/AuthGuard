@@ -61,12 +61,21 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# Step 3: Remove any legacy/stale containers holding ports (80, 443, 6379, 5432)
+# Step 3: Free up disk space on EC2 (Deletes unused Docker images & cache, NEVER touches volumes)
+echo "🧹 Pruning unused Docker images and build caches to free disk space..."
+docker image prune -af >/dev/null 2>&1 || true
+docker builder prune -af >/dev/null 2>&1 || true
+docker container prune -f >/dev/null 2>&1 || true
+
+echo "💾 Available Disk Space on Server:"
+df -h / | awk 'NR==2 {print "   Free: " $4 " of " $2 " (" $5 " used)"}'
+
+# Step 4: Remove any legacy/stale containers holding ports (80, 443, 6379, 5432)
 echo "🧹 Cleaning up legacy containers and releasing port allocations..."
 docker rm -f auth_redis_v1 auth_postgres_v1 auth_app_v1 auth_nginx_v1 auth_certbot_v1 \
              auth_redis auth_postgres auth_app auth_nginx auth_certbot 2>/dev/null || true
 
-# Step 4: Ensure initial self-signed SSL certs exist so Nginx can boot immediately
+# Step 5: Ensure initial self-signed SSL certs exist so Nginx can boot immediately
 mkdir -p ./nginx/ssl
 if [ ! -f ./nginx/ssl/cert.pem ] || [ ! -f ./nginx/ssl/key.pem ]; then
     echo "🔒 Generating initial self-signed SSL certificate for Nginx boot..."
