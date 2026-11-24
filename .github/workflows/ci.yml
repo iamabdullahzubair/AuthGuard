@@ -94,8 +94,8 @@ jobs:
           REDIS_URL: redis://localhost:6379
           AES_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           SESSION_SECRET: test-ci-session-secret-string-32-chars
-          VAPID_PUBLIC_KEY: test-key
-          VAPID_PRIVATE_KEY: test-key
+          VAPID_PUBLIC_KEY: BNo2PXuFiety_I5a7fQQxpPO8ixhApzyh-DyR5Ut1qGS34wRF4iExHgZHvKy5qRrjMmKd9PH9Algh_5TN6y4Q_0
+          VAPID_PRIVATE_KEY: t5LxJrtasXAkHhDKlVwO1TrbVpeZ1OrXEHVSfjK2wMM
         run: |
           cd backend
           npm test
