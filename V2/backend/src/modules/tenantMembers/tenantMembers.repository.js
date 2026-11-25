@@ -24,6 +24,11 @@ export async function insertTenantMember({ tenantId, email, passwordHash, role }
 }
 
 export async function updateTenantMemberRole({ tenantId, memberId, role }) {
+  const before = await pool.query(
+    `SELECT role FROM tenant_members WHERE tenant_id = $1 AND id = $2 AND is_super_admin = false AND role <> 'owner'`,
+    [tenantId, memberId]
+  );
+  if (!before.rowCount) return null;
   const result = await pool.query(
     `UPDATE tenant_members
         SET role = $3, updated_at = NOW()
@@ -31,15 +36,15 @@ export async function updateTenantMemberRole({ tenantId, memberId, role }) {
       RETURNING id, email, role, must_change_password, created_at, updated_at`,
     [tenantId, memberId, role]
   );
-  return result.rows[0] || null;
+  return result.rows[0] ? { member: result.rows[0], previousRole: before.rows[0].role } : null;
 }
 
 export async function deleteTenantMember({ tenantId, memberId }) {
   const result = await pool.query(
     `DELETE FROM tenant_members
       WHERE tenant_id = $1 AND id = $2 AND is_super_admin = false AND role <> 'owner'
-      RETURNING id`,
+      RETURNING id, email, role`,
     [tenantId, memberId]
   );
-  return Boolean(result.rowCount);
+  return result.rows[0] || null;
 }

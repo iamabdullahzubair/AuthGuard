@@ -8,12 +8,10 @@ import { AccountActions } from '@/components/dashboard/AccountActions';
 const available = [
   { href: '/admin', label: 'Platform overview', icon: CircleGauge, exact: true },
   { href: '/admin/tenants', label: 'Tenant directory', icon: Building2 },
+  { href: '/admin/audit-logs', label: 'Activity & audit logs', icon: Activity },
   { href: '/admin/security', label: 'Account security', icon: LockKeyhole },
 ];
-const planned = [
-  { label: 'Activity & audit logs', icon: Activity },
-  { label: 'System health', icon: ServerCog },
-];
+const planned = [{ label: 'System health', icon: ServerCog }];
 
 export function AdminNavigation() {
   const pathname = usePathname();

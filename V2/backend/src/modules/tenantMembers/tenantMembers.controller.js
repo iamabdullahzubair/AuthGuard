@@ -28,7 +28,7 @@ export const tenantMembersController = {
 
   async create(req, res) {
     const input = parseBody(memberSchema, req.body);
-    return APIResponse.success(res, await createTenantMember({ tenantId: req.tenant.id, ...input }), {
+    return APIResponse.success(res, await createTenantMember({ tenantId: req.tenant.id, req, ...input }), {
       statusCode: 201,
       message: 'Tenant member created',
     });
@@ -40,6 +40,7 @@ export const tenantMembersController = {
       tenantId: req.tenant.id,
       memberId: req.params.memberId,
       role,
+      req,
     }), { message: 'Tenant member role updated' });
   },
 
@@ -47,6 +48,7 @@ export const tenantMembersController = {
     return APIResponse.success(res, await removeTenantMember({
       tenantId: req.tenant.id,
       memberId: req.params.memberId,
+      req,
     }), { message: 'Tenant member removed' });
   },
 };

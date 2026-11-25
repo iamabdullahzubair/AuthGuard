@@ -59,11 +59,11 @@ export const authController = {
   },
 
   async logout(req, res) {
-    return APIResponse.success(res, await logout(req.authSession.id), { message: 'Logged out' });
+    return APIResponse.success(res, await logout(req.authSession.id, req), { message: 'Logged out' });
   },
 
   async logoutAll(req, res) {
-    return APIResponse.success(res, await logoutEverywhere(req.member.id), { message: 'Logged out from all devices' });
+    return APIResponse.success(res, await logoutEverywhere(req.member.id, req), { message: 'Logged out from all devices' });
   },
 
   async listSessions(req, res) {
@@ -71,7 +71,7 @@ export const authController = {
   },
 
   async revokeSession(req, res) {
-    return APIResponse.success(res, await revokeOneSession(req.member.id, req.authSession.id, req.params.sessionId), { message: 'Session revoked' });
+    return APIResponse.success(res, await revokeOneSession(req.member.id, req.authSession.id, req.params.sessionId, req), { message: 'Session revoked' });
   },
 
   me(req, res) {
@@ -87,15 +87,16 @@ export const authController = {
     return APIResponse.success(res, await changePassword({
       memberId: req.member.id,
       sessionId: req.authSession.id,
+      req,
       ...input,
     }), { message: 'Password changed' });
   },
 
   async impersonate(req, res) {
-    return APIResponse.success(res, await impersonateTenant(req.authSession.id, req.params.tenantId), { message: 'Tenant impersonation started' });
+    return APIResponse.success(res, await impersonateTenant(req.authSession.id, req.params.tenantId, req), { message: 'Tenant impersonation started' });
   },
 
   async exitImpersonation(req, res) {
-    return APIResponse.success(res, await exitTenantImpersonation(req.authSession.id), { message: 'Tenant impersonation ended' });
+    return APIResponse.success(res, await exitTenantImpersonation(req.authSession.id, req), { message: 'Tenant impersonation ended' });
   },
 };

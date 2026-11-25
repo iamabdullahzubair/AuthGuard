@@ -23,6 +23,7 @@ export async function requireSession(req, res, next) {
     }
 
     const impersonating = Boolean(session.impersonation_tenant_id && session.target_id);
+    req.isImpersonating = impersonating;
     const tenant = impersonating
       ? {
           id: session.target_id,

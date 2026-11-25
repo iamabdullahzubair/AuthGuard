@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from 'react';
 import { apiRequest } from '@/lib/api';
+import { ClientDateTime } from '@/components/ClientDateTime';
 import { Check, CircleAlert, Plus, Search, ShieldCheck, Trash2, UserRound, UsersRound, X } from 'lucide-react';
 
 type TenantMember = { id: string; email: string; role: string; must_change_password: boolean; created_at: string; updated_at: string };
@@ -91,7 +92,7 @@ export function UsersClient({ members: initialMembers, ownerId, initialError }: 
           <tbody className="divide-y divide-[#eff2f0]">{filteredMembers.map((member) => <tr key={member.id} className="group transition hover:bg-[#fbfdfb]">
             <td className="px-5 py-3.5"><div className="flex items-center gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-xl text-[11px] font-bold ${member.role === 'owner' ? 'bg-[#e1f3e7] text-[#246346]' : 'bg-[#edf1f5] text-[#5c7083]'}`}>{member.email.slice(0, 1).toUpperCase()}</div><div><div className="text-[11px] font-semibold text-[#34443b]">{member.email}</div><div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] text-[#9ba69f]">{member.id === ownerId ? 'You · workspace owner' : `Member ID ${member.id.slice(0, 8)}`}{member.must_change_password && <span className="rounded-full bg-[#fff6e3] px-2 py-0.5 font-semibold text-[#926a1f]">Password change required</span>}</div></div></div></td>
             <td className="px-4 py-3.5">{editing === member.id ? <div className="flex items-center gap-1.5"><input aria-label="New role label" value={editRole} maxLength={50} onChange={(event) => setEditRole(event.target.value)} className="field h-8 w-36 rounded-lg px-2.5 py-1 text-[10px]" /><button disabled={busy} onClick={() => saveRole(member.id)} className="rounded-lg bg-[#e7f4eb] p-2 text-[#327956] hover:bg-[#d8eedf] disabled:opacity-50" aria-label="Save role"><Check size={13} /></button><button onClick={() => setEditing(null)} className="rounded-lg p-2 text-[#98a39c] hover:bg-[#f0f3f1]" aria-label="Cancel role edit"><X size={13} /></button></div> : <span className={`status-pill ${member.role === 'owner' ? 'bg-[#e9f6ed] text-[#347555]' : 'bg-[#f0f3f5] text-[#5e6c77]'}`}>{member.role === 'owner' && <ShieldCheck size={12} />}{member.role}</span>}</td>
-            <td className="px-4 py-3.5 text-[10px] text-[#8e9a92]">{new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(member.created_at))}</td>
+            <td className="px-4 py-3.5 text-[10px] text-[#8e9a92]"><ClientDateTime value={member.created_at} /></td>
             <td className="px-4 py-3.5 text-right">{member.role === 'owner' ? <span className="pr-2 text-[9px] font-medium text-[#a1aaa4]">Protected</span> : <div className="inline-flex items-center gap-1"><button onClick={() => { setEditing(member.id); setEditRole(member.role); }} className="rounded-lg px-2.5 py-1.5 text-[10px] font-semibold text-[#527461] hover:bg-[#edf6f0]">Edit role</button><button onClick={() => setRemoving(member)} className="rounded-lg p-2 text-[#a1aaa4] hover:bg-[#fff2ef] hover:text-[#bd5543]" aria-label={`Remove ${member.email}`}><Trash2 size={14} /></button></div>}</td>
           </tr>)}</tbody>
         </table>

@@ -30,7 +30,7 @@ export async function onboardTenant({ name, slug, ownerEmail, initialPassword, t
   if (!/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(cleanSlug)) throw new SuperAdminError(400, 'Slug must use lowercase letters, numbers, and internal hyphens', 'INVALID_SLUG');
   const passwordHash = await argon2.hash(initialPassword, passwordOptions);
   try {
-    await insertTenant({ id: crypto.randomUUID(), name: cleanName, slug: cleanSlug, tier, ownerId: crypto.randomUUID(), ownerEmail: cleanEmail, passwordHash, actorId: actor.id, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    await insertTenant({ id: crypto.randomUUID(), name: cleanName, slug: cleanSlug, tier, ownerId: crypto.randomUUID(), ownerEmail: cleanEmail, passwordHash, actor, ipAddress: req.ip, userAgent: req.get('user-agent') });
   } catch (error) {
     if (error.code === '23505') throw new SuperAdminError(409, 'Tenant slug or owner email is already in use', 'ALREADY_EXISTS');
     throw error;
@@ -46,14 +46,14 @@ export async function changeTenant(tenantId, input, actor, req) {
   if (!Object.keys(changes).length) throw new SuperAdminError(400, 'Provide a tenant name, status, or tier to update', 'EMPTY_UPDATE');
   if (changes.status !== undefined && !['active', 'suspended'].includes(changes.status)) throw new SuperAdminError(400, 'Status must be active or suspended', 'INVALID_STATUS');
   if (changes.tier !== undefined && !tiers.has(changes.tier)) throw new SuperAdminError(400, 'Choose a valid tenant tier', 'INVALID_TIER');
-  const tenant = await persistTenantUpdate({ tenantId, changes, actorId: actor.id, ipAddress: req.ip, userAgent: req.get('user-agent') });
+  const tenant = await persistTenantUpdate({ tenantId, changes, actor, ipAddress: req.ip, userAgent: req.get('user-agent') });
   if (!tenant) throw new SuperAdminError(404, 'Tenant not found', 'TENANT_NOT_FOUND');
   return tenant;
 }
 
 export async function resetTenantOwnerPassword(tenantId, newPassword, actor, req) {
   const passwordHash = await argon2.hash(newPassword, passwordOptions);
-  const result = await persistPasswordReset({ tenantId, passwordHash, actorId: actor.id, ipAddress: req.ip, userAgent: req.get('user-agent') });
+  const result = await persistPasswordReset({ tenantId, passwordHash, actor, ipAddress: req.ip, userAgent: req.get('user-agent') });
   if (!result) throw new SuperAdminError(404, 'Tenant owner account not found', 'TENANT_OWNER_NOT_FOUND');
   return { ownerEmail: result.email, mustChangePassword: true };
 }

@@ -59,6 +59,7 @@ export default async function DashboardPage() {
         <div className="mt-4 space-y-2">
           <QuickLink href="/dashboard/security" icon={KeyRound} title="Review signed-in devices" description="Revoke sessions you no longer use." />
           {!profile.member.isSuperAdmin && profile.member.role === 'owner' && <QuickLink href="/dashboard/team" icon={UsersRound} title="Set up your team" description="Create accounts and manage role labels." />}
+          {!profile.member.isSuperAdmin && profile.member.role === 'owner' && <QuickLink href="/dashboard/activity" icon={Activity} title="Review workspace activity" description="See sign-ins, security changes, and team management events." />}
         </div>
         <div className="mt-4 rounded-xl border border-[#e8eee9] bg-[#f8faf8] px-3.5 py-3 text-[10px] leading-5 text-[#78867d]">More controls will appear here as their V2 APIs become available.</div>
       </div>

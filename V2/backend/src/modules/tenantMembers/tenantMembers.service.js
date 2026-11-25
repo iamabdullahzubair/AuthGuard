@@ -1,4 +1,5 @@
 import argon2 from 'argon2';
+import { auditRequest } from '../audit/audit.service.js';
 import {
   deleteTenantMember,
   insertTenantMember,
@@ -29,7 +30,7 @@ export async function getTenantMembers(tenantId) {
   return { members: await listTenantMembers(tenantId) };
 }
 
-export async function createTenantMember({ tenantId, email, password, role }) {
+export async function createTenantMember({ tenantId, email, password, role, req }) {
   try {
     const member = await insertTenantMember({
       tenantId,
@@ -37,6 +38,7 @@ export async function createTenantMember({ tenantId, email, password, role }) {
       passwordHash: await argon2.hash(password, passwordOptions),
       role: normalizeRole(role),
     });
+    await auditRequest(req, { event: 'TENANT_MEMBER_CREATED', tenantId, targetMemberId: member.id, targetEmail: member.email, metadata: { role: member.role, mustChangePassword: true } });
     return { member };
   } catch (error) {
     if (error.code === '23505') {
@@ -46,14 +48,16 @@ export async function createTenantMember({ tenantId, email, password, role }) {
   }
 }
 
-export async function changeTenantMemberRole({ tenantId, memberId, role }) {
-  const member = await updateTenantMemberRole({ tenantId, memberId, role: normalizeRole(role) });
-  if (!member) throw new TenantMemberError(404, 'Member not found or cannot be changed', 'MEMBER_NOT_FOUND');
-  return { member };
+export async function changeTenantMemberRole({ tenantId, memberId, role, req }) {
+  const result = await updateTenantMemberRole({ tenantId, memberId, role: normalizeRole(role) });
+  if (!result) throw new TenantMemberError(404, 'Member not found or cannot be changed', 'MEMBER_NOT_FOUND');
+  await auditRequest(req, { event: 'TENANT_MEMBER_ROLE_CHANGED', tenantId, targetMemberId: result.member.id, targetEmail: result.member.email, metadata: { previousRole: result.previousRole, role: result.member.role } });
+  return { member: result.member };
 }
 
-export async function removeTenantMember({ tenantId, memberId }) {
+export async function removeTenantMember({ tenantId, memberId, req }) {
   const removed = await deleteTenantMember({ tenantId, memberId });
   if (!removed) throw new TenantMemberError(404, 'Member not found or cannot be removed', 'MEMBER_NOT_FOUND');
+  await auditRequest(req, { event: 'TENANT_MEMBER_REMOVED', tenantId, targetMemberId: removed.id, targetEmail: removed.email, metadata: { role: removed.role } });
   return null;
 }

@@ -3,19 +3,20 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { KeyRound, LayoutDashboard, Menu, ShieldCheck, UsersRound, X } from 'lucide-react';
+import { Activity, KeyRound, LayoutDashboard, Menu, ShieldCheck, UsersRound, X } from 'lucide-react';
 import { AccountActions } from './AccountActions';
 
 const items = [
   { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, exact: true },
   { href: '/dashboard/team', label: 'Team members', icon: UsersRound },
+  { href: '/dashboard/activity', label: 'Activity & audit logs', icon: Activity },
   { href: '/dashboard/security', label: 'Security & sessions', icon: KeyRound },
 ];
 
 export function Navigation({ workspace, owner }: { workspace: string; owner: boolean }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const visibleItems = owner ? items : items.filter((item) => item.href !== '/dashboard/team');
+  const visibleItems = owner ? items : items.filter((item) => !['/dashboard/team', '/dashboard/activity'].includes(item.href));
 
   const links = visibleItems.map((item) => {
     const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
