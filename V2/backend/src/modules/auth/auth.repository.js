@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 export async function findMemberForLogin(email) {
   const result = await pool.query(
     `SELECT m.id, m.tenant_id, m.email, m.password_hash, m.role,
+            m.must_change_password,
             m.is_super_admin, t.name AS tenant_name, t.slug AS tenant_slug,
             t.status AS tenant_status, t.tier, t.branding
        FROM tenant_members m
@@ -61,7 +62,8 @@ export async function registerTenantMember({ tenant, member, session }) {
 export async function findSession(tokenHash) {
   const result = await pool.query(
     `SELECT s.id AS session_id, s.member_id, s.impersonation_tenant_id,
-            m.email, m.role, m.is_super_admin, m.tenant_id AS home_tenant_id,
+            m.email, m.role, m.is_super_admin, m.must_change_password,
+            m.tenant_id AS home_tenant_id,
             ht.name AS home_tenant_name, ht.slug AS home_tenant_slug,
             ht.status AS home_tenant_status, ht.tier AS home_tier, ht.branding AS home_branding,
             tt.id AS target_id, tt.name AS target_name, tt.slug AS target_slug,
@@ -120,7 +122,9 @@ export async function changeMemberPassword({ memberId, currentSessionId, passwor
   try {
     await client.query('BEGIN');
     await client.query(
-      `UPDATE tenant_members SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE tenant_members
+          SET password_hash = $1, must_change_password = false, updated_at = NOW()
+        WHERE id = $2`,
       [passwordHash, memberId]
     );
     await client.query(

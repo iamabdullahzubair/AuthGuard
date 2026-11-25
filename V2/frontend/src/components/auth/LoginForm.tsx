@@ -23,7 +23,10 @@ export function LoginForm() {
         method: 'POST',
         body: JSON.stringify({ email, password, deviceName: 'Web browser', deviceType: 'web' }),
       });
-      router.replace(data.member.isSuperAdmin && !data.tenant ? '/admin' : '/dashboard');
+      const destination = data.member.mustChangePassword
+        ? '/change-password'
+        : data.member.isSuperAdmin && !data.tenant ? '/admin' : '/dashboard';
+      router.replace(destination);
       router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign-in failed. Please try again.');

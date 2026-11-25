@@ -1,6 +1,6 @@
 # AuthGuard V2 Portal
 
-This is the V2 Next.js portal, isolated from the existing `frontend/` application. It currently covers the V2 API surface: tenant registration and sign-in, workspace overview, owner-only member management, active sessions, password changes, and Super Admin tenant impersonation.
+This is the V2 Next.js portal, isolated from the existing `frontend/` application. It currently covers the V2 API surface: tenant registration and sign-in, workspace overview, owner-only member management, forced first-login password change, active sessions, password changes, and Super Admin tenant impersonation.
 
 ## Run locally
 

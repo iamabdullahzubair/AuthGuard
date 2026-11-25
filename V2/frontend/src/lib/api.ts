@@ -10,6 +10,7 @@ export type Member = {
   email: string;
   role: string;
   isSuperAdmin: boolean;
+  mustChangePassword: boolean;
 };
 
 export type Tenant = {

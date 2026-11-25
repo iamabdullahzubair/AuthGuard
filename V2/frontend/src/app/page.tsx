@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic';
 export default async function HomePage() {
   const profile = await getServerProfile();
   if (!profile) redirect('/login');
+  if (profile.member.mustChangePassword) redirect('/change-password');
   if (profile.member.isSuperAdmin && !profile.tenant) redirect('/admin');
   redirect('/dashboard');
 }

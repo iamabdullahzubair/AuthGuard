@@ -5,7 +5,7 @@ import { getServerProfile, serverApi } from '@/lib/server-api';
 
 export const metadata: Metadata = { title: 'Team members' };
 
-type TeamMember = { id: string; email: string; role: string; created_at: string; updated_at: string };
+type TeamMember = { id: string; email: string; role: string; must_change_password: boolean; created_at: string; updated_at: string };
 type MemberData = { members: TeamMember[] };
 
 export default async function TeamPage() {

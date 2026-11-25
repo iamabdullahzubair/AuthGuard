@@ -78,6 +78,7 @@ function memberResponse(member) {
     email: member.email,
     role: member.role,
     isSuperAdmin: Boolean(member.is_super_admin),
+    mustChangePassword: Boolean(member.must_change_password),
   };
 }
 

@@ -48,6 +48,7 @@ export async function requireSession(req, res, next) {
       email: session.email,
       role: impersonating ? 'owner' : session.role,
       isSuperAdmin,
+      mustChangePassword: Boolean(session.must_change_password),
     };
     req.tenant = tenant;
     req.authSession = { id: session.session_id };
@@ -57,6 +58,17 @@ export async function requireSession(req, res, next) {
   } catch (error) {
     return next(error);
   }
+}
+
+export function requirePasswordChangeComplete(req, res, next) {
+  if (req.member?.mustChangePassword) {
+    return APIResponse.error(res, {
+      statusCode: 403,
+      code: 'PASSWORD_CHANGE_REQUIRED',
+      message: 'Change your password before using this endpoint',
+    });
+  }
+  return next();
 }
 
 export function requireSuperAdmin(req, res, next) {
