@@ -48,6 +48,6 @@ V2 HTTP responses use the common envelope `{ "success": true, "message": "...", 
 - Before scaling relay volume, reduce idle PostgreSQL polling. Consider adaptive backoff or PostgreSQL `LISTEN/NOTIFY` to wake the relay, while keeping a periodic outbox scan as recovery. PostgreSQL remains the source of truth so a missed notification cannot lose an event.
 - Consider a short-lived Redis cache for active-session verification only after metrics show PostgreSQL session lookups are a bottleneck. Keep PostgreSQL authoritative, fall back to it on cache misses/Redis errors, and invalidate cached sessions on logout, password change, impersonation, and session revocation.
 - When the end-user/MFA module is implemented, link each tenant's registering owner to an `end_users` identity so the owner's MFA enrollment and policy can use the same end-user flow.
-- Add frontend controls for multi-device sessions. The backend supports parallel sessions per member, identifies each session by device name/type, lists active sessions, and revokes one session without affecting the others.
+- `V2/frontend/` includes controls for listing and revoking multi-device sessions. The backend supports parallel sessions per member and identifies each session by device name/type.
 
-Feature API modules, a v1 data import plan, and realtime challenge updates are still later milestones. The frontend remains on v1 until the v2 API contract and cutover plan are ready.
+Feature API modules, a v1 data import plan, and realtime challenge updates are still later milestones. The legacy `frontend/` remains on v1; `V2/frontend/` targets only the currently available V2 APIs and is deployed independently.
