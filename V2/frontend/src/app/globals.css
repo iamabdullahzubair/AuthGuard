@@ -34,12 +34,14 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   background-size: 17px 17px;
 }
 .surface-shadow { box-shadow: 0 18px 60px rgba(28, 49, 41, .07), 0 2px 8px rgba(28, 49, 41, .03); }
-.field {
-  width: 100%; border: 1px solid #dce5df; border-radius: 12px; background: #fff;
-  padding: 12px 14px; color: var(--ink); outline: none; transition: border-color .16s, box-shadow .16s;
+@layer components {
+  .field {
+    width: 100%; border: 1px solid #dce5df; border-radius: 12px; background: #fff;
+    padding: 12px 14px; color: var(--ink); outline: none; transition: border-color .16s, box-shadow .16s;
+  }
+  .field::placeholder { color: #9aa79f; }
+  .field:focus { border-color: #55a27c; box-shadow: 0 0 0 4px rgba(57, 145, 99, .12); }
 }
-.field::placeholder { color: #9aa79f; }
-.field:focus { border-color: #55a27c; box-shadow: 0 0 0 4px rgba(57, 145, 99, .12); }
 .label { display: block; margin-bottom: 7px; color: #35443d; font-size: 12px; font-weight: 650; }
 .btn-primary {
   display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 0;
