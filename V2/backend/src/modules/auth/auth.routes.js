@@ -12,6 +12,7 @@ router.use((_req, res, next) => {
 
 router.post('/register', wrap(authController.register));
 router.post('/login', wrap(authController.login));
+router.get('/tenant/:slug', wrap(authController.resolveTenant));
 
 router.use(requireSession);
 router.get('/me', authController.me);

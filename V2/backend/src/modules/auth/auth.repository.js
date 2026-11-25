@@ -176,3 +176,10 @@ export async function findTenantById(tenantId) {
   );
   return result.rows[0] || null;
 }
+
+export async function findActiveTenantBySlug(slug) {
+  const result = await pool.query(
+    `SELECT name, slug FROM tenants WHERE lower(slug) = lower($1) AND status = 'active'`, [slug]
+  );
+  return result.rows[0] || null;
+}

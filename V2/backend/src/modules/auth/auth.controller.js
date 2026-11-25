@@ -9,6 +9,7 @@ import {
   logout,
   logoutEverywhere,
   registerTenantOwner,
+  resolveTenantLoginContext,
   revokeOneSession,
 } from './auth.service.js';
 import { AuthError } from './auth.service.js';
@@ -49,6 +50,12 @@ export const authController = {
   async login(req, res) {
     const input = parseBody(loginSchema, req.body);
     return APIResponse.success(res, await loginMember({ ...input, req }), { message: 'Login successful' });
+  },
+
+  async resolveTenant(req, res) {
+    const slug = z.string().trim().min(1).max(48).safeParse(req.params.slug);
+    if (!slug.success) throw new AuthError(400, 'Invalid tenant slug', 'INVALID_TENANT_SLUG');
+    return APIResponse.success(res, await resolveTenantLoginContext(slug.data));
   },
 
   async logout(req, res) {

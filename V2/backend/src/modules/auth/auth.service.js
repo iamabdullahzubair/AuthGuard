@@ -13,6 +13,7 @@ import {
   clearImpersonationTenant,
   createSession,
   findMemberForLogin,
+  findActiveTenantBySlug,
   findTenantById,
   getMemberPassword,
   listActiveMemberSessions,
@@ -185,6 +186,11 @@ export async function loginMember({ email, password, deviceName, deviceType, req
     expiresAt: session.expiresAt.toISOString(),
     ...responseForMember(member),
   };
+}
+
+export async function resolveTenantLoginContext(slug) {
+  const tenant = await findActiveTenantBySlug(slug.trim());
+  return tenant ? { tenant } : { tenant: null };
 }
 
 export async function logout(sessionId) {

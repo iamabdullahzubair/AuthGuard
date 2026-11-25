@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail } from 'lucide-react';
@@ -13,6 +13,15 @@ export function LoginForm() {
   const [visible, setVisible] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [tenantName, setTenantName] = useState('');
+
+  useEffect(() => {
+    const slug = new URLSearchParams(window.location.search).get('tenant');
+    if (!slug) return;
+    apiRequest<{ tenant: { name: string } | null }>(`auth/tenant/${encodeURIComponent(slug)}`)
+      .then((result) => setTenantName(result.tenant?.name || ''))
+      .catch(() => setTenantName(''));
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,7 +49,7 @@ export function LoginForm() {
       <div className="mb-8">
         <p className="mb-2 text-[11px] font-bold uppercase tracking-[.16em] text-[#378467]">Welcome back</p>
         <h2 className="text-[30px] font-semibold tracking-[-.05em] text-[#17251f]">Sign in to your account</h2>
-        <p className="mt-2 text-[13px] leading-6 text-[#748078]">Use your workspace member credentials to continue.</p>
+        <p className="mt-2 text-[13px] leading-6 text-[#748078]">{tenantName ? <>Workspace: <span className="font-semibold text-[#52665a]">{tenantName}</span>. Use your member credentials to continue.</> : 'Use your workspace member credentials to continue.'}</p>
       </div>
 
       {error && <div role="alert" className="mb-5 rounded-xl border border-[#f1cbc3] bg-[#fff5f2] px-4 py-3 text-[12px] leading-5 text-[#a44131]">{error}</div>}
