@@ -1,5 +1,4 @@
 import { redirect } from 'next/navigation';
-import { AccountActions } from '@/components/dashboard/AccountActions';
 import { ExitImpersonation } from '@/components/dashboard/ExitImpersonation';
 import { Navigation } from '@/components/dashboard/Navigation';
 import { getServerProfile } from '@/lib/server-api';
@@ -27,7 +26,6 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block"><div className="max-w-[220px] truncate text-[11px] font-semibold text-[#314239]">{profile.member.email}</div><div className="mt-0.5 text-[9px] capitalize text-[#91a097]">{role}</div></div>
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e0f3e6] text-[11px] font-bold text-[#1c654a]">{profile.member.email.slice(0, 1).toUpperCase()}</div>
-          <AccountActions />
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1440px] px-5 py-7 sm:px-8 sm:py-9 lg:px-10">{children}</main>

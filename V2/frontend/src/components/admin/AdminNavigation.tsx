@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Activity, Building2, CircleGauge, LockKeyhole, ServerCog, ShieldCheck } from 'lucide-react';
+import { AccountActions } from '@/components/dashboard/AccountActions';
 
 const available = [
   { href: '/admin', label: 'Platform overview', icon: CircleGauge, exact: true },
@@ -18,12 +19,13 @@ export function AdminNavigation() {
   const pathname = usePathname();
 
   return <>
-  <nav aria-label="Platform console navigation" className="flex gap-1 overflow-x-auto border-b border-[#e6ece7] bg-white px-3 py-2 lg:hidden">
+  <nav aria-label="Platform console navigation" className="flex items-center gap-1 overflow-x-auto border-b border-[#e6ece7] bg-white px-3 py-2 lg:hidden">
     {available.map((item) => {
       const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
       const Icon = item.icon;
       return <Link key={item.href} href={item.href} className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-semibold ${active ? 'bg-[#edf5ef] text-[#286344]' : 'text-[#758279] hover:bg-[#f5f8f5]'}`}><Icon size={13} />{item.label}</Link>;
     })}
+    <AccountActions className="ml-auto h-8 shrink-0 px-2.5 text-[9px]" />
   </nav>
   <aside className="sticky top-0 hidden h-screen w-[258px] shrink-0 flex-col bg-[#142f27] px-4 pb-4 pt-5 text-white lg:flex">
     <Link href="/admin" className="flex h-12 items-center gap-3 px-1">
@@ -47,7 +49,7 @@ export function AdminNavigation() {
     <div className="mb-2 mt-8 px-2 text-[9px] font-bold uppercase tracking-[.16em] text-[#769487]">Observability</div>
     <div className="space-y-1">{planned.map((item) => { const Icon = item.icon; return <div key={item.label} aria-disabled="true" title="Planned for a later V2 milestone" className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 text-[11px] font-medium text-[#70897c]"><Icon size={15} />{item.label}<span className="ml-auto rounded-full border border-white/[.08] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-[#80988a]">Planned</span></div>; })}</div>
 
-    <div className="mt-auto rounded-2xl border border-white/[.08] bg-white/[.045] p-3.5"><div className="text-[10px] font-semibold text-[#d9eee0]">V2 console</div><p className="mt-1.5 text-[9px] leading-[1.65] text-[#91ad9d]">Only actions backed by the V2 platform API are enabled.</p></div>
+    <AccountActions className="mt-auto h-10 w-full justify-start border-transparent bg-transparent px-3 text-[#afc5b9] hover:border-transparent hover:bg-white/[.06] hover:text-white" />
     <div className="px-2 pt-4 text-[9px] text-[#728d7e]">AuthGuard · Platform operations</div>
   </aside>
   </>;

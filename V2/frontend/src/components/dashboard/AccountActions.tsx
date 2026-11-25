@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { LogOut, LoaderCircle } from 'lucide-react';
 import { apiRequest } from '@/lib/api';
 
-export function AccountActions() {
+export function AccountActions({ className = '' }: { className?: string }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
 
@@ -17,7 +17,7 @@ export function AccountActions() {
     router.refresh();
   }
 
-  return <button onClick={logout} disabled={pending} className="btn-secondary h-9 px-3 text-[11px] disabled:opacity-60">
+  return <button onClick={logout} disabled={pending} className={`btn-secondary h-9 px-3 text-[11px] disabled:opacity-60 ${className}`}>
     {pending ? <LoaderCircle size={14} className="animate-spin" /> : <LogOut size={14} />}
     Sign out
   </button>;

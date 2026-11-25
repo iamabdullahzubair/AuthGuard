@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { KeyRound, LayoutDashboard, Menu, ShieldCheck, UsersRound, X } from 'lucide-react';
+import { AccountActions } from './AccountActions';
 
 const items = [
   { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, exact: true },
@@ -50,10 +51,7 @@ export function Navigation({ workspace, owner }: { workspace: string; owner: boo
 
       <nav aria-label="Main navigation" className="mt-8 space-y-1">{links}</nav>
 
-      <div className="mt-auto rounded-2xl border border-white/[.08] bg-white/[.045] p-3.5">
-        <div className="flex items-center gap-2 text-[10px] font-semibold text-[#d9eee0]"><span className="h-1.5 w-1.5 rounded-full bg-[#7fe0a0]" />V2 workspace</div>
-        <p className="mt-2 text-[10px] leading-[1.65] text-[#91ad9d]">Your account and team access are managed through the new AuthGuard API.</p>
-      </div>
+      <AccountActions className="mt-auto h-10 w-full justify-start border-transparent bg-transparent px-3 text-[#afc5b9] hover:border-transparent hover:bg-white/[.06] hover:text-white" />
       <div className="px-2 pt-4 text-[9px] text-[#728d7e]">AuthGuard · Secure access</div>
     </aside>
   </>;
